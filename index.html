@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MarketLab Strategy Monitor</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Watchlist and data controls">
+        <div class="brand">
+          <div class="brand-mark">ML</div>
+          <div>
+            <h1>MarketLab</h1>
+            <p>Strategy monitor</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="panel-title">
+            <h2>Universe</h2>
+            <button id="refreshAllBtn" class="icon-button" title="Refresh all symbols" aria-label="Refresh all symbols">↻</button>
+          </div>
+          <form id="symbolForm" class="symbol-form">
+            <input id="symbolInput" type="text" autocomplete="off" placeholder="AAPL, MSFT, VOD.L">
+            <button type="submit">Add</button>
+          </form>
+          <div id="watchlist" class="watchlist" aria-live="polite"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <h2>Data</h2>
+          </div>
+          <label>
+            Range
+            <select id="rangeSelect">
+              <option value="1">1 year</option>
+              <option value="3" selected>3 years</option>
+              <option value="5">5 years</option>
+              <option value="10">10 years</option>
+            </select>
+          </label>
+          <label>
+            Starting capital
+            <input id="capitalInput" type="number" min="100" step="100" value="10000">
+          </label>
+          <p class="source-note">Daily OHLCV data is requested through a local proxy from Yahoo Finance's public chart endpoint. Prices are delayed end-of-day data.</p>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Selected market</p>
+            <h2 id="activeSymbol">AAPL</h2>
+          </div>
+          <div class="status-strip">
+            <span id="dataStatus">Ready</span>
+            <button id="exportBtn" class="secondary-button">Export CSV</button>
+          </div>
+        </header>
+
+        <section class="metrics-grid" aria-label="Strategy metrics">
+          <article class="metric-card">
+            <span>Total return</span>
+            <strong id="metricReturn">--</strong>
+          </article>
+          <article class="metric-card">
+            <span>CAGR</span>
+            <strong id="metricCagr">--</strong>
+          </article>
+          <article class="metric-card">
+            <span>Max drawdown</span>
+            <strong id="metricDrawdown">--</strong>
+          </article>
+          <article class="metric-card">
+            <span>Sharpe</span>
+            <strong id="metricSharpe">--</strong>
+          </article>
+          <article class="metric-card">
+            <span>Trades</span>
+            <strong id="metricTrades">--</strong>
+          </article>
+        </section>
+
+        <section class="chart-section">
+          <div class="chart-toolbar">
+            <div>
+              <h2>Price and equity curve</h2>
+              <p id="chartSubtitle">Close price with strategy equity overlay</p>
+            </div>
+            <div class="segmented" role="tablist" aria-label="Chart mode">
+              <button class="active" data-chart-mode="price" type="button">Price</button>
+              <button data-chart-mode="equity" type="button">Equity</button>
+              <button data-chart-mode="drawdown" type="button">Drawdown</button>
+            </div>
+          </div>
+          <div class="chart-controls" aria-label="Chart zoom controls">
+            <label>
+              From
+              <input id="zoomStartInput" type="date">
+            </label>
+            <label>
+              To
+              <input id="zoomEndInput" type="date">
+            </label>
+            <div class="quick-zoom" aria-label="Quick zoom presets">
+              <button data-zoom-window="30" type="button">1M</button>
+              <button data-zoom-window="90" type="button">3M</button>
+              <button data-zoom-window="180" type="button">6M</button>
+              <button id="zoomResetBtn" type="button">All</button>
+            </div>
+          </div>
+          <canvas id="mainChart" height="330" aria-label="Market chart"></canvas>
+          <div class="volume-header">
+            <div>
+              <h2>Volume</h2>
+              <p id="volumeSummary">Estimated buying and selling pressure</p>
+            </div>
+            <div class="volume-tools">
+              <label>
+                Interval
+                <select id="volumeIntervalSelect">
+                  <option value="1">Daily</option>
+                  <option value="3">3 days</option>
+                  <option value="7">7 days</option>
+                  <option value="14">14 days</option>
+                  <option value="30">30 days</option>
+                </select>
+              </label>
+              <label>
+                View
+                <select id="volumeModeSelect">
+                  <option value="split">Buy / sell</option>
+                  <option value="net">Net change</option>
+                  <option value="integrated">Integrated</option>
+                </select>
+              </label>
+              <div class="volume-legend" aria-label="Volume legend">
+                <span><i class="buy-dot"></i>Buying</span>
+                <span><i class="sell-dot"></i>Selling</span>
+              </div>
+            </div>
+          </div>
+          <canvas id="volumeChart" class="volume-chart" height="170" aria-label="Buying and selling volume chart"></canvas>
+        </section>
+
+        <section class="analysis-layout">
+          <article class="panel strategy-panel">
+            <div class="panel-title">
+              <h2>Strategy Lab</h2>
+              <div class="panel-title-buttons">
+                <button id="optimiseBtn" class="secondary-button">Optimise</button>
+                <button id="runBtn" class="primary-button">Run test</button>
+              </div>
+            </div>
+
+            <label>
+              Strategy
+              <select id="strategySelect">
+                <option value="sma">SMA crossover</option>
+                <option value="rsi">RSI mean reversion</option>
+                <option value="breakout">Donchian breakout</option>
+                <option value="buyhold">Buy and hold</option>
+              </select>
+            </label>
+
+            <div id="strategyParams" class="param-grid"></div>
+
+            <div class="toggle-row">
+              <label class="checkbox-label">
+                <input id="longOnlyInput" type="checkbox" checked>
+                Long only
+              </label>
+              <label class="checkbox-label">
+                <input id="feesInput" type="checkbox" checked>
+                Include 0.1% trading fee
+              </label>
+            </div>
+
+            <div id="optimiserRanges" class="optimiser-ranges"></div>
+
+            <div id="optimiserProgress" class="optimiser-progress" hidden>
+              <div class="optimiser-progress-track">
+                <div id="optimiserProgressBar" class="optimiser-progress-fill"></div>
+              </div>
+              <div class="optimiser-progress-row">
+                <span id="optimiserProgressText">0 / 0</span>
+                <button id="optimiserCancel" class="secondary-button" type="button">Cancel</button>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-title">
+              <h2>Signals</h2>
+              <span id="signalCount">0</span>
+            </div>
+            <div id="signalList" class="signal-list"></div>
+          </article>
+        </section>
+
+        <section id="optimiserResults" class="panel optimiser-results" hidden>
+          <div class="panel-title">
+            <h2>Optimisation results</h2>
+            <button id="applyBestBtn" class="primary-button">Apply best parameters</button>
+          </div>
+          <div id="optimiserBest" class="optimiser-best"></div>
+          <div id="optimiserResultsBody" class="optimiser-results-body"></div>
+          <p id="optimiserFooter" class="source-note"></p>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

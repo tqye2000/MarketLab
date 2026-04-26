@@ -1,0 +1,37 @@
+{
+  "watchlist": [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "SPY",
+    "BATS.L",
+    "KGF.L"
+  ],
+  "activeSymbol": "KGF.L",
+  "rangeYears": "1",
+  "startingCapital": 10000,
+  "strategy": "rsi",
+  "strategyParams": {
+    "sma": {
+      "fast": 40,
+      "slow": 35
+    },
+    "rsi": {
+      "period": 23,
+      "buyBelow": 35,
+      "sellAbove": 70
+    },
+    "buyhold": {},
+    "breakout": {
+      "lookback": 40,
+      "exit": 40
+    }
+  },
+  "longOnly": true,
+  "includeFees": true,
+  "chartMode": "price",
+  "volumeInterval": 3,
+  "volumeMode": "net",
+  "zoomStart": "2025-04-28",
+  "zoomEnd": "2026-04-24"
+}
