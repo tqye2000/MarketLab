@@ -5,10 +5,13 @@
     "NVDA",
     "SPY",
     "BATS.L",
-    "KGF.L"
+    "KGF.L",
+    "PFE",
+    "LGEN.L",
+    "BP.L"
   ],
   "activeSymbol": "KGF.L",
-  "rangeYears": "1",
+  "rangeYears": "3",
   "startingCapital": 10000,
   "strategy": "rsi",
   "strategyParams": {
@@ -17,8 +20,8 @@
       "slow": 35
     },
     "rsi": {
-      "period": 23,
-      "buyBelow": 35,
+      "period": 14,
+      "buyBelow": 40,
       "sellAbove": 70
     },
     "buyhold": {},
@@ -32,6 +35,6 @@
   "chartMode": "price",
   "volumeInterval": 3,
   "volumeMode": "net",
-  "zoomStart": "2025-04-28",
+  "zoomStart": "2024-04-26",
   "zoomEnd": "2026-04-24"
 }
