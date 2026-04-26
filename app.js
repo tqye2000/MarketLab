@@ -68,6 +68,7 @@ const state = {
   volumeInterval: 1,
   volumeMode: "split",
   strategyParams: {},
+  savedSymbolParams: {},
   settingsLoaded: false,
   saveTimer: null,
   backtest: null,
@@ -111,6 +112,9 @@ const els = {
   optimiserBest: document.querySelector("#optimiserBest"),
   optimiserFooter: document.querySelector("#optimiserFooter"),
   applyBestBtn: document.querySelector("#applyBestBtn"),
+  saveParamsBtn: document.querySelector("#saveParamsBtn"),
+  loadParamsBtn: document.querySelector("#loadParamsBtn"),
+  savedParamsHint: document.querySelector("#savedParamsHint"),
   metrics: {
     totalReturn: document.querySelector("#metricReturn"),
     cagr: document.querySelector("#metricCagr"),
@@ -457,6 +461,54 @@ function renderParamInputs() {
       saveSettings();
     });
   });
+}
+
+function updateSavedParamsButtons() {
+  const symbol = state.activeSymbol;
+  const strategy = els.strategySelect.value;
+  const saved = state.savedSymbolParams[symbol]?.[strategy];
+  els.loadParamsBtn.disabled = !saved;
+  if (saved) {
+    const paramDefs = strategyParams[strategy] || [];
+    const summary = paramDefs.map((p) => `${p.label}: ${saved[p.key]}`).join(", ");
+    els.savedParamsHint.textContent = `Saved: ${summary}`;
+  } else {
+    els.savedParamsHint.textContent = "";
+  }
+}
+
+function saveSymbolParams() {
+  const symbol = state.activeSymbol;
+  const strategy = els.strategySelect.value;
+  const params = getParams();
+  if (!state.savedSymbolParams[symbol]) state.savedSymbolParams[symbol] = {};
+  state.savedSymbolParams[symbol][strategy] = { ...params };
+  saveSettings();
+  updateSavedParamsButtons();
+  setStatus(`Saved ${strategy.toUpperCase()} parameters for ${symbol}`);
+}
+
+function loadSymbolParams() {
+  const symbol = state.activeSymbol;
+  const strategy = els.strategySelect.value;
+  const saved = state.savedSymbolParams[symbol]?.[strategy];
+  if (!saved) return;
+  state.strategyParams[strategy] = { ...saved };
+  renderParamInputs();
+  updateSavedParamsButtons();
+  saveSettings();
+  selectSymbol(state.activeSymbol);
+  setStatus(`Loaded saved ${strategy.toUpperCase()} parameters for ${symbol}`);
+}
+
+function autoLoadSymbolParams() {
+  const symbol = state.activeSymbol;
+  const strategy = els.strategySelect.value;
+  const saved = state.savedSymbolParams[symbol]?.[strategy];
+  if (!saved) return false;
+  state.strategyParams[strategy] = { ...saved };
+  renderParamInputs();
+  return true;
 }
 
 function renderWatchlist() {
@@ -946,6 +998,7 @@ function applySettings(settings) {
   state.volumeInterval = Number(settings.volumeInterval) || state.volumeInterval;
   state.volumeMode = settings.volumeMode || state.volumeMode;
   state.strategyParams = settings.strategyParams && typeof settings.strategyParams === "object" ? settings.strategyParams : {};
+  state.savedSymbolParams = settings.savedSymbolParams && typeof settings.savedSymbolParams === "object" ? settings.savedSymbolParams : {};
   state.zoomStart = settings.zoomStart || "";
   state.zoomEnd = settings.zoomEnd || "";
 
@@ -972,6 +1025,7 @@ function collectSettings() {
     startingCapital: Number(els.capitalInput.value) || 10000,
     strategy: els.strategySelect.value,
     strategyParams: state.strategyParams,
+    savedSymbolParams: state.savedSymbolParams,
     longOnly: els.longOnlyInput.checked,
     includeFees: els.feesInput.checked,
     chartMode: state.chartMode,
@@ -1006,6 +1060,8 @@ async function selectSymbol(symbol, force = false) {
   state.activeSymbol = symbol;
   els.activeSymbol.textContent = symbol;
   renderWatchlist();
+  autoLoadSymbolParams();
+  updateSavedParamsButtons();
   state.data = await fetchMarketData(symbol, els.rangeSelect.value, force);
   state.backtest = runBacktest(state.data);
   syncZoomBounds(state.backtest.rows, dataKey);
@@ -1082,9 +1138,12 @@ els.strategySelect.addEventListener("change", () => {
   renderOptimiserRanges();
   hideOptimiserResults();
   els.optimiseBtn.disabled = els.strategySelect.value === "buyhold";
+  updateSavedParamsButtons();
   saveSettings();
   selectSymbol(state.activeSymbol);
 });
+els.saveParamsBtn.addEventListener("click", saveSymbolParams);
+els.loadParamsBtn.addEventListener("click", loadSymbolParams);
 els.refreshAllBtn.addEventListener("click", refreshAllSymbols);
 els.exportBtn.addEventListener("click", exportBacktest);
 els.zoomStartInput.addEventListener("change", () => setZoom(els.zoomStartInput.value, els.zoomEndInput.value));
@@ -1258,8 +1317,12 @@ function applyBestParams() {
   if (!result?.results.length) return;
   const best = result.results[0].params;
   const strategy = els.strategySelect.value;
+  const symbol = state.activeSymbol;
   state.strategyParams[strategy] = { ...best };
+  if (!state.savedSymbolParams[symbol]) state.savedSymbolParams[symbol] = {};
+  state.savedSymbolParams[symbol][strategy] = { ...best };
   renderParamInputs();
+  updateSavedParamsButtons();
   saveSettings();
   selectSymbol(state.activeSymbol);
 }

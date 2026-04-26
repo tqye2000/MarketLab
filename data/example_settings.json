@@ -10,8 +10,8 @@
     "LGEN.L",
     "BP.L"
   ],
-  "activeSymbol": "KGF.L",
-  "rangeYears": "3",
+  "activeSymbol": "BATS.L",
+  "rangeYears": "1",
   "startingCapital": 10000,
   "strategy": "rsi",
   "strategyParams": {
@@ -20,9 +20,9 @@
       "slow": 35
     },
     "rsi": {
-      "period": 14,
+      "period": 18,
       "buyBelow": 40,
-      "sellAbove": 70
+      "sellAbove": 55
     },
     "buyhold": {},
     "breakout": {
@@ -30,11 +30,27 @@
       "exit": 40
     }
   },
+  "savedSymbolParams": {
+    "KGF.L": {
+      "rsi": {
+        "period": 14,
+        "buyBelow": 40,
+        "sellAbove": 70
+      }
+    },
+    "BATS.L": {
+      "rsi": {
+        "period": 18,
+        "buyBelow": 40,
+        "sellAbove": 55
+      }
+    }
+  },
   "longOnly": true,
   "includeFees": true,
   "chartMode": "price",
   "volumeInterval": 3,
   "volumeMode": "net",
-  "zoomStart": "2024-04-26",
+  "zoomStart": "2025-04-28",
   "zoomEnd": "2026-04-24"
 }
