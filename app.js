@@ -94,6 +94,9 @@ const els = {
   dataStatus: document.querySelector("#dataStatus"),
   chartSubtitle: document.querySelector("#chartSubtitle"),
   mainChart: document.querySelector("#mainChart"),
+  rsiSection: document.querySelector("#rsiSection"),
+  rsiChart: document.querySelector("#rsiChart"),
+  rsiSummary: document.querySelector("#rsiSummary"),
   volumeChart: document.querySelector("#volumeChart"),
   zoomStartInput: document.querySelector("#zoomStartInput"),
   zoomEndInput: document.querySelector("#zoomEndInput"),
@@ -161,6 +164,11 @@ function sourceSymbol(symbol) {
   return symbolAliases[normalized] || normalized;
 }
 
+function marketDisplayName(symbol) {
+  const meta = state.metaCache.get(symbol);
+  return meta?.longName || meta?.shortName || meta?.displayName || symbol;
+}
+
 async function fetchMarketData(symbol, years, force = false) {
   const key = `${symbol}-${years}`;
   if (!force && state.cache.has(key)) return state.cache.get(key);
@@ -177,12 +185,19 @@ async function fetchMarketData(symbol, years, force = false) {
     if (rows.length < 12) throw new Error("Not enough rows returned");
     state.cache.set(key, rows);
     const currency = normalizeCurrency(meta.currency || inferCurrency(symbol));
-    state.metaCache.set(symbol, { symbol, currency, sourceSymbol: meta.symbol || sourceSymbol(symbol) });
+    state.metaCache.set(symbol, {
+      symbol,
+      currency,
+      sourceSymbol: meta.symbol || sourceSymbol(symbol),
+      shortName: meta.shortName || "",
+      longName: meta.longName || "",
+      displayName: meta.displayName || "",
+    });
     setStatus(`Loaded ${rows.length} daily bars from Yahoo Finance${currency ? ` (${currency})` : ""}`);
     return rows;
   } catch (error) {
     const fallback = parseCsv(SAMPLE_CSV);
-    state.metaCache.set(symbol, { symbol, currency: "USD", sourceSymbol: "AAPL" });
+    state.metaCache.set(symbol, { symbol, currency: "USD", sourceSymbol: "AAPL", shortName: "", longName: "", displayName: "" });
     setStatus(`Using demo data: ${error.message}`);
     state.cache.set(key, fallback);
     return fallback;
@@ -464,6 +479,7 @@ function renderParamInputs() {
     input.addEventListener("change", () => {
       getParams();
       saveSettings();
+      renderRsiChart();
     });
   });
 }
@@ -666,9 +682,25 @@ function clampDate(value, min, max) {
   return value;
 }
 
+function getSelectedAnalysisRows(rows) {
+  if (!rows.length) return [];
+  const firstDate = rows[0].date;
+  const lastDate = rows.at(-1).date;
+  let start = clampDate(state.zoomStart || els.zoomStartInput.value || firstDate, firstDate, lastDate);
+  let end = clampDate(state.zoomEnd || els.zoomEndInput.value || lastDate, firstDate, lastDate);
+  if (start > end) {
+    [start, end] = [end, start];
+  }
+  state.zoomStart = start;
+  state.zoomEnd = end;
+  els.zoomStartInput.value = start;
+  els.zoomEndInput.value = end;
+  return rows.filter((row) => row.date >= start && row.date <= end);
+}
+
 function setZoom(start, end) {
-  if (!state.backtest?.rows.length) return;
-  const rows = state.backtest.rows;
+  const rows = state.data.length ? state.data : state.backtest?.rows || [];
+  if (!rows.length) return;
   const firstDate = rows[0].date;
   const lastDate = rows.at(-1).date;
   state.zoomStart = clampDate(start, firstDate, lastDate);
@@ -680,12 +712,13 @@ function setZoom(start, end) {
   els.zoomEndInput.value = state.zoomEnd;
   saveSettings();
   renderChart();
+  renderRsiChart();
   renderVolumeChart();
 }
 
 function setZoomWindow(days) {
-  if (!state.backtest?.rows.length) return;
-  const rows = state.backtest.rows;
+  const rows = state.data.length ? state.data : state.backtest?.rows || [];
+  if (!rows.length) return;
   const clampedEndIndex = rows.length - 1;
   const startIndex = Math.max(clampedEndIndex - days + 1, 0);
   setZoom(rows[startIndex].date, rows[clampedEndIndex].date);
@@ -766,6 +799,66 @@ function renderChart() {
   ctx.textAlign = "right";
   ctx.fillText(rows.at(-1)?.date || "", rect.width - pad.right, 318);
   ctx.textAlign = "left";
+}
+
+function renderRsiChart() {
+  const isRsiStrategy = els.strategySelect.value === "rsi";
+  const rsiValues = state.backtest?.indicators?.rsi;
+  const hasRsiSeries = isRsiStrategy && Array.isArray(rsiValues);
+  els.rsiSection.hidden = !hasRsiSeries;
+  if (!hasRsiSeries) return;
+
+  const canvas = els.rsiChart;
+  const ctx = canvas.getContext("2d");
+  const pixelRatio = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = Math.round(rect.width * pixelRatio);
+  canvas.height = Math.round(150 * pixelRatio);
+  ctx.scale(pixelRatio, pixelRatio);
+  ctx.clearRect(0, 0, rect.width, 150);
+
+  const visible = getVisibleWindow();
+  const series = visible.indexes.map((index) => rsiValues[index]);
+  const params = getParams();
+  const latestValue = [...series].reverse().find((value) => Number.isFinite(value));
+  els.rsiSummary.textContent = Number.isFinite(latestValue)
+    ? `Latest RSI ${latestValue.toFixed(1)} · buy below ${params.buyBelow} · sell above ${params.sellAbove}`
+    : "RSI values begin after the warm-up period for the selected range";
+
+  const pad = { top: 12, right: 56, bottom: 26, left: 52 };
+  const width = rect.width - pad.left - pad.right;
+  const height = 150 - pad.top - pad.bottom;
+  const x = (index) => pad.left + (index / Math.max(series.length - 1, 1)) * width;
+  const y = (value) => pad.top + (1 - value / 100) * height;
+
+  drawRsiGrid(ctx, pad, rect.width, y, params.buyBelow, params.sellAbove);
+  drawLine(ctx, series, x, y, "#2364aa", 2);
+
+  ctx.fillStyle = "#627074";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText(visible.rows[0]?.date || "", pad.left, 142);
+  ctx.textAlign = "right";
+  ctx.fillText(visible.rows.at(-1)?.date || "", rect.width - pad.right, 142);
+  ctx.textAlign = "left";
+}
+
+function drawRsiGrid(ctx, pad, fullWidth, y, buyBelow, sellAbove) {
+  const lines = [100, sellAbove, 50, buyBelow, 0]
+    .filter((value, index, array) => array.indexOf(value) === index)
+    .sort((a, b) => b - a);
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "#627074";
+  ctx.font = "12px system-ui, sans-serif";
+
+  lines.forEach((level) => {
+    const lineY = y(level);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, lineY);
+    ctx.lineTo(fullWidth - pad.right, lineY);
+    ctx.strokeStyle = level === 50 ? "#d6dfda" : level === buyBelow ? "#0f7a5a" : level === sellAbove ? "#b9443f" : "#e4e9e5";
+    ctx.stroke();
+    ctx.fillText(String(level), fullWidth - pad.right + 8, lineY + 4);
+  });
 }
 
 function renderVolumeChart() {
@@ -1126,18 +1219,20 @@ function saveSettings() {
 async function selectSymbol(symbol, force = false) {
   const dataKey = `${symbol}-${els.rangeSelect.value}`;
   state.activeSymbol = symbol;
-  els.activeSymbol.textContent = symbol;
+  els.activeSymbol.textContent = marketDisplayName(symbol);
   renderWatchlist();
   autoLoadSymbolParams();
   updateSavedParamsButtons();
   state.data = await fetchMarketData(symbol, els.rangeSelect.value, force);
-  state.backtest = runBacktest(state.data);
-  syncZoomBounds(state.backtest.rows, dataKey);
+  els.activeSymbol.textContent = marketDisplayName(symbol);
+  syncZoomBounds(state.data, dataKey);
+  state.backtest = runBacktest(getSelectedAnalysisRows(state.data));
   renderMetrics(state.backtest.metrics);
   renderBuyHoldComparison();
   renderSignals(state.backtest.trades);
   renderWatchlist();
   renderChart();
+  renderRsiChart();
   renderVolumeChart();
   saveSettings();
 }
@@ -1238,6 +1333,7 @@ els.volumeModeSelect.addEventListener("change", () => {
   renderVolumeChart();
 });
 window.addEventListener("resize", renderChart);
+window.addEventListener("resize", renderRsiChart);
 window.addEventListener("resize", renderVolumeChart);
 
 document.querySelectorAll("[data-zoom-window]").forEach((button) => {
@@ -1360,7 +1456,8 @@ async function startOptimisation() {
 
   setStatus(`Optimising ${combos.toLocaleString()} combinations...`);
   const data = await fetchMarketData(state.activeSymbol, els.rangeSelect.value);
-  if (!data || data.length < 12) {
+  const analysisRows = getSelectedAnalysisRows(data || []);
+  if (!analysisRows.length || analysisRows.length < 12) {
     setStatus("Not enough data to optimise.");
     els.optimiseBtn.disabled = false;
     els.runBtn.disabled = false;
@@ -1368,7 +1465,7 @@ async function startOptimisation() {
     return;
   }
 
-  const result = await runOptimisation(data, strategy, ranges, baseOptions, (done, total) => {
+  const result = await runOptimisation(analysisRows, strategy, ranges, baseOptions, (done, total) => {
     const pct = Math.round((done / total) * 100);
     els.optimiserProgressBar.style.width = `${pct}%`;
     els.optimiserProgressText.textContent = `${done.toLocaleString()} / ${total.toLocaleString()}`;

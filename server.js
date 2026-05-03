@@ -181,6 +181,9 @@ async function fetchHistory(symbol, years) {
     meta: {
       symbol: result.meta?.symbol || yahooSymbol(symbol),
       currency: result.meta?.currency || "",
+      shortName: result.meta?.shortName || "",
+      longName: result.meta?.longName || "",
+      displayName: result.meta?.displayName || "",
       exchangeName: result.meta?.exchangeName || "",
       instrumentType: result.meta?.instrumentType || "",
     },
