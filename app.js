@@ -67,6 +67,7 @@ const state = {
   zoomDataKey: "",
   volumeInterval: 1,
   volumeMode: "split",
+  showBuyHoldComparison: false,
   strategyParams: {},
   savedSymbolParams: {},
   settingsLoaded: false,
@@ -85,6 +86,7 @@ const els = {
   strategyParams: document.querySelector("#strategyParams"),
   longOnlyInput: document.querySelector("#longOnlyInput"),
   feesInput: document.querySelector("#feesInput"),
+  buyHoldComparisonInput: document.querySelector("#buyHoldComparisonInput"),
   runBtn: document.querySelector("#runBtn"),
   refreshAllBtn: document.querySelector("#refreshAllBtn"),
   exportBtn: document.querySelector("#exportBtn"),
@@ -112,6 +114,9 @@ const els = {
   optimiserBest: document.querySelector("#optimiserBest"),
   optimiserFooter: document.querySelector("#optimiserFooter"),
   applyBestBtn: document.querySelector("#applyBestBtn"),
+  buyHoldComparison: document.querySelector("#buyHoldComparison"),
+  buyHoldComparisonBody: document.querySelector("#buyHoldComparisonBody"),
+  buyHoldComparisonDelta: document.querySelector("#buyHoldComparisonDelta"),
   saveParamsBtn: document.querySelector("#saveParamsBtn"),
   loadParamsBtn: document.querySelector("#loadParamsBtn"),
   savedParamsHint: document.querySelector("#savedParamsHint"),
@@ -540,6 +545,66 @@ function renderMetrics(metrics) {
   setMetric(els.metrics.drawdown, percent(metrics.maxDrawdown), metrics.maxDrawdown);
   els.metrics.sharpe.textContent = metrics.sharpe.toFixed(2);
   els.metrics.trades.textContent = metrics.trades;
+}
+
+function renderBuyHoldComparison() {
+  if (!state.showBuyHoldComparison || !state.backtest?.rows.length) {
+    els.buyHoldComparison.hidden = true;
+    return;
+  }
+
+  const capital = Math.max(Number(els.capitalInput.value) || 10000, 100);
+  const feeRate = els.feesInput.checked ? 0.001 : 0;
+  const reference = runBacktest(state.backtest.rows, {
+    strategy: "buyhold",
+    params: {},
+    capital,
+    feeRate,
+    longOnly: true,
+  });
+  const active = state.backtest.metrics;
+  const buyHold = reference.metrics;
+  const activeLabel = els.strategySelect.selectedOptions[0]?.textContent || "Strategy";
+  const cagrDelta = active.cagr - buyHold.cagr;
+
+  setMetric(
+    els.buyHoldComparisonDelta,
+    cagrDelta === 0 ? "Same CAGR" : `Strategy ${cagrDelta > 0 ? "+" : ""}${(cagrDelta * 100).toFixed(2)} pp CAGR`,
+    cagrDelta,
+  );
+
+  const rows = [
+    { label: "Total return", activeValue: percent(active.totalReturn), referenceValue: percent(buyHold.totalReturn), delta: formatComparisonDelta(active.totalReturn - buyHold.totalReturn, "pp"), tone: true },
+    { label: "CAGR", activeValue: percent(active.cagr), referenceValue: percent(buyHold.cagr), delta: formatComparisonDelta(cagrDelta, "pp"), tone: true },
+    { label: "Max drawdown", activeValue: percent(active.maxDrawdown), referenceValue: percent(buyHold.maxDrawdown), delta: formatComparisonDelta(active.maxDrawdown - buyHold.maxDrawdown, "pp"), tone: true },
+    { label: "Sharpe", activeValue: active.sharpe.toFixed(2), referenceValue: buyHold.sharpe.toFixed(2), delta: formatComparisonDelta(active.sharpe - buyHold.sharpe, ""), tone: true },
+    { label: "Trades", activeValue: String(active.trades), referenceValue: String(buyHold.trades), delta: formatComparisonDelta(active.trades - buyHold.trades, ""), tone: false },
+  ];
+
+  els.buyHoldComparisonBody.innerHTML = `
+    <table class="comparison-table">
+      <thead>
+        <tr><th>Metric</th><th>${activeLabel}</th><th>Buy and hold</th><th>Difference</th></tr>
+      </thead>
+      <tbody>
+        ${rows.map((row) => `
+          <tr>
+            <th>${row.label}</th>
+            <td>${row.activeValue}</td>
+            <td>${row.referenceValue}</td>
+            <td class="${row.tone && row.delta.value > 0 ? "positive" : row.tone && row.delta.value < 0 ? "negative" : ""}">${row.delta.text}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>`;
+  els.buyHoldComparison.hidden = false;
+}
+
+function formatComparisonDelta(value, suffix) {
+  if (value === 0) return { text: suffix ? `0.00 ${suffix}` : "0.00", value };
+  const sign = value > 0 ? "+" : "";
+  const scaled = suffix === "pp" ? value * 100 : value;
+  return { text: `${sign}${scaled.toFixed(2)}${suffix ? ` ${suffix}` : ""}`, value };
 }
 
 function setMetric(element, text, value) {
@@ -997,6 +1062,7 @@ function applySettings(settings) {
   state.chartMode = settings.chartMode || state.chartMode;
   state.volumeInterval = Number(settings.volumeInterval) || state.volumeInterval;
   state.volumeMode = settings.volumeMode || state.volumeMode;
+  state.showBuyHoldComparison = Boolean(settings.showBuyHoldComparison);
   state.strategyParams = settings.strategyParams && typeof settings.strategyParams === "object" ? settings.strategyParams : {};
   state.savedSymbolParams = settings.savedSymbolParams && typeof settings.savedSymbolParams === "object" ? settings.savedSymbolParams : {};
   state.zoomStart = settings.zoomStart || "";
@@ -1007,6 +1073,7 @@ function applySettings(settings) {
   els.strategySelect.value = settings.strategy || els.strategySelect.value;
   els.longOnlyInput.checked = settings.longOnly ?? els.longOnlyInput.checked;
   els.feesInput.checked = settings.includeFees ?? els.feesInput.checked;
+  els.buyHoldComparisonInput.checked = state.showBuyHoldComparison;
   els.volumeIntervalSelect.value = String(state.volumeInterval);
   els.volumeModeSelect.value = state.volumeMode;
   state.zoomDataKey = `${state.activeSymbol}-${els.rangeSelect.value}`;
@@ -1028,6 +1095,7 @@ function collectSettings() {
     savedSymbolParams: state.savedSymbolParams,
     longOnly: els.longOnlyInput.checked,
     includeFees: els.feesInput.checked,
+    showBuyHoldComparison: state.showBuyHoldComparison,
     chartMode: state.chartMode,
     volumeInterval: state.volumeInterval,
     volumeMode: state.volumeMode,
@@ -1066,6 +1134,7 @@ async function selectSymbol(symbol, force = false) {
   state.backtest = runBacktest(state.data);
   syncZoomBounds(state.backtest.rows, dataKey);
   renderMetrics(state.backtest.metrics);
+  renderBuyHoldComparison();
   renderSignals(state.backtest.trades);
   renderWatchlist();
   renderChart();
@@ -1128,6 +1197,11 @@ els.longOnlyInput.addEventListener("change", () => {
 els.feesInput.addEventListener("change", () => {
   saveSettings();
   selectSymbol(state.activeSymbol);
+});
+els.buyHoldComparisonInput.addEventListener("change", () => {
+  state.showBuyHoldComparison = els.buyHoldComparisonInput.checked;
+  renderBuyHoldComparison();
+  saveSettings();
 });
 els.runBtn.addEventListener("click", () => {
   saveSettings();

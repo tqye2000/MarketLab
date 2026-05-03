@@ -86,6 +86,14 @@
           </article>
         </section>
 
+        <section id="buyHoldComparison" class="comparison-panel" aria-label="Buy and hold comparison" hidden>
+          <div class="comparison-title">
+            <h2>Buy and hold reference</h2>
+            <span id="buyHoldComparisonDelta">--</span>
+          </div>
+          <div id="buyHoldComparisonBody" class="comparison-table-wrap"></div>
+        </section>
+
         <section class="chart-section">
           <div class="chart-toolbar">
             <div>
@@ -184,6 +192,10 @@
               <label class="checkbox-label">
                 <input id="feesInput" type="checkbox" checked>
                 Include 0.1% trading fee
+              </label>
+              <label class="checkbox-label">
+                <input id="buyHoldComparisonInput" type="checkbox">
+                Show buy and hold reference
               </label>
             </div>
 

@@ -20,7 +20,9 @@ node server.js --port 4174
 
 ## Local Settings
 
-The app saves your watchlist and UI parameters to `data/settings.json` through the local server. This file is ignored by Git so your personal symbols, strategy settings, zoom window, capital amount, fee toggle, and volume display preferences stay local to your machine.
+The app saves your watchlist and UI parameters to `data/settings.json` through the local server. This file is ignored by Git so your personal symbols, strategy settings, zoom window, capital amount, fee toggle, buy-and-hold comparison preference, and volume display preferences stay local to your machine.
+
+Strategy parameters can also be saved per stock. Click **Save params** in the Strategy Lab to store the current parameters for the active symbol and strategy. When you switch back to that stock, the saved parameters are restored automatically. The optimiser's **Apply best parameters** button also saves the result per stock.
 
 ## Data Source
 
@@ -37,7 +39,9 @@ Use normal Yahoo Finance symbols such as `AAPL`, `MSFT`, `SPY`, or exchange suff
 - Donchian breakout
 - Buy and hold
 
-The backtester reports total return, CAGR, max drawdown, Sharpe ratio, trade count, signal history, and exportable CSV results.
+Each strategy (except buy and hold) has tuneable parameters. The built-in optimiser searches parameter combinations for a selected stock and data range to maximise CAGR.
+
+The backtester reports total return, CAGR, max drawdown, Sharpe ratio, trade count, signal history, an optional buy-and-hold reference, and exportable CSV results.
 
 ## Notes
 

@@ -48,6 +48,7 @@
   },
   "longOnly": true,
   "includeFees": true,
+  "showBuyHoldComparison": false,
   "chartMode": "price",
   "volumeInterval": 3,
   "volumeMode": "net",
