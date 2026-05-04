@@ -95,6 +95,7 @@ const els = {
   chartSubtitle: document.querySelector("#chartSubtitle"),
   mainChart: document.querySelector("#mainChart"),
   rsiSection: document.querySelector("#rsiSection"),
+  indicatorTitle: document.querySelector("#indicatorTitle"),
   rsiChart: document.querySelector("#rsiChart"),
   rsiSummary: document.querySelector("#rsiSummary"),
   volumeChart: document.querySelector("#volumeChart"),
@@ -106,6 +107,10 @@ const els = {
   volumeSummary: document.querySelector("#volumeSummary"),
   signalList: document.querySelector("#signalList"),
   signalCount: document.querySelector("#signalCount"),
+  nextSignalTrigger: document.querySelector("#nextSignalTrigger"),
+  nextSignalAction: document.querySelector("#nextSignalAction"),
+  nextSignalSummary: document.querySelector("#nextSignalSummary"),
+  nextSignalDetail: document.querySelector("#nextSignalDetail"),
   optimiseBtn: document.querySelector("#optimiseBtn"),
   optimiserRanges: document.querySelector("#optimiserRanges"),
   optimiserProgress: document.querySelector("#optimiserProgress"),
@@ -479,7 +484,7 @@ function renderParamInputs() {
     input.addEventListener("change", () => {
       getParams();
       saveSettings();
-      renderRsiChart();
+      renderStrategyIndicatorChart();
     });
   });
 }
@@ -648,6 +653,145 @@ function renderSignals(trades) {
     .join("");
 }
 
+function renderNextSignalTrigger() {
+  const trigger = buildNextSignalTrigger(state.backtest?.rows || []);
+  els.nextSignalAction.textContent = trigger.action;
+  els.nextSignalAction.className = `signal-action ${trigger.action.toLowerCase()}`;
+  els.nextSignalSummary.textContent = trigger.summary;
+  els.nextSignalDetail.textContent = trigger.detail || "";
+}
+
+function buildNextSignalTrigger(rows) {
+  if (!rows.length) {
+    return { action: "HOLD", summary: "Run a strategy test to calculate the next trigger.", detail: "" };
+  }
+
+  const strategy = els.strategySelect.value;
+  const params = getParams();
+  const latest = rows.at(-1);
+  const latestClose = latest.close;
+  const currency = currencyForSymbol(state.activeSymbol);
+
+  if (strategy === "buyhold") {
+    return {
+      action: "HOLD",
+      summary: "Buy and hold stays invested, so there is no rule-based next buy or sell trigger.",
+      detail: `Latest close: ${money(latestClose, currency)} on ${latest.date}.`,
+    };
+  }
+
+  const baseTarget = buildSignalSeries(rows, { strategy, params, longOnly: true }).target;
+  const basePosition = baseTarget.at(-1) === 1 ? 1 : 0;
+  const trigger =
+    strategy === "sma"
+      ? nextSmaTrigger(rows, params, basePosition)
+      : strategy === "rsi"
+        ? nextRsiTrigger(rows, params, basePosition)
+        : nextBreakoutTrigger(rows, params, basePosition);
+
+  if (!trigger) {
+    return {
+      action: "HOLD",
+      summary: "There is not enough selected history to calculate the next trigger.",
+      detail: `Latest close: ${money(latestClose, currency)} on ${latest.date}.`,
+    };
+  }
+
+  const action = basePosition ? "SELL" : "BUY";
+  const move = latestClose ? trigger.level / latestClose - 1 : 0;
+  const moveText = `${move >= 0 ? "+" : ""}${(move * 100).toFixed(2)}%`;
+  const modeNote = els.longOnlyInput.checked ? "" : " Long only is off, so BUY means rotating from short to long and SELL means rotating from long to short.";
+  return {
+    action,
+    summary: `${action} if the next close is ${trigger.operator} ${money(trigger.level, currency)} (${moveText} from latest close).`,
+    detail: `${trigger.detail} Latest close: ${money(latestClose, currency)} on ${latest.date}.${modeNote}`,
+  };
+}
+
+function nextBreakoutTrigger(rows, params, basePosition) {
+  if (basePosition) {
+    const level = rangeLow(rows, params.exit);
+    if (!Number.isFinite(level)) return null;
+    return { level, operator: "below", detail: `Donchian exit uses the lowest low from the last ${params.exit} bars.` };
+  }
+  const level = rangeHigh(rows, params.lookback);
+  if (!Number.isFinite(level)) return null;
+  return { level, operator: "above", detail: `Donchian entry uses the highest high from the last ${params.lookback} bars.` };
+}
+
+function nextSmaTrigger(rows, params, basePosition) {
+  const fast = Number(params.fast);
+  const slow = Number(params.slow);
+  const requiredRows = Math.max(fast, slow) - 1;
+  if (rows.length < requiredRows || fast === slow) return null;
+
+  const closes = rows.map((row) => row.close);
+  const fastSum = sumLast(closes, fast - 1);
+  const slowSum = sumLast(closes, slow - 1);
+  const slope = 1 / fast - 1 / slow;
+  const offset = fastSum / fast - slowSum / slow;
+  if (slope === 0) return null;
+
+  const level = -offset / slope;
+  if (!Number.isFinite(level)) return null;
+  const operator = basePosition ? (slope > 0 ? "at or below" : "at or above") : (slope > 0 ? "above" : "below");
+  return { level, operator, detail: `SMA crossover compares the next ${fast}-day average with the next ${slow}-day average.` };
+}
+
+function nextRsiTrigger(rows, params, basePosition) {
+  const period = Number(params.period);
+  const closes = rows.map((row) => row.close);
+  const averages = rsiAverages(closes, period);
+  if (!averages) return null;
+
+  const latestClose = closes.at(-1);
+  if (basePosition) {
+    const rs = params.sellAbove / (100 - params.sellAbove);
+    const level = latestClose + (period - 1) * (rs * averages.avgLoss - averages.avgGain);
+    if (!Number.isFinite(level)) return null;
+    return { level, operator: "above", detail: `RSI exit triggers when next RSI rises above ${params.sellAbove}.` };
+  }
+
+  const rs = params.buyBelow / (100 - params.buyBelow);
+  const level = latestClose + (period - 1) * (averages.avgLoss - averages.avgGain / rs);
+  if (!Number.isFinite(level)) return null;
+  return { level, operator: "below", detail: `RSI entry triggers when next RSI falls below ${params.buyBelow}.` };
+}
+
+function rsiAverages(values, period) {
+  if (values.length <= period || period <= 0) return null;
+  let avgGain = 0;
+  let avgLoss = 0;
+  for (let i = 1; i < values.length; i += 1) {
+    const change = values[i] - values[i - 1];
+    const gain = Math.max(change, 0);
+    const loss = Math.max(-change, 0);
+    if (i <= period) {
+      avgGain += gain / period;
+      avgLoss += loss / period;
+    } else {
+      avgGain = (avgGain * (period - 1) + gain) / period;
+      avgLoss = (avgLoss * (period - 1) + loss) / period;
+    }
+  }
+  return { avgGain, avgLoss };
+}
+
+function sumLast(values, count) {
+  if (count <= 0) return 0;
+  return values.slice(-count).reduce((sum, value) => sum + value, 0);
+}
+
+function rangeHigh(rows, count) {
+  if (rows.length < count || count <= 0) return null;
+  return Math.max(...rows.slice(-count).map((row) => row.high));
+}
+
+function rangeLow(rows, count) {
+  if (rows.length < count || count <= 0) return null;
+  return Math.min(...rows.slice(-count).map((row) => row.low));
+}
+
 function syncZoomBounds(rows, dataKey) {
   if (!rows.length) return;
   const firstDate = rows[0].date;
@@ -710,9 +854,16 @@ function setZoom(start, end) {
   }
   els.zoomStartInput.value = state.zoomStart;
   els.zoomEndInput.value = state.zoomEnd;
+  if (state.data.length) {
+    state.backtest = runBacktest(getSelectedAnalysisRows(state.data));
+    renderMetrics(state.backtest.metrics);
+    renderBuyHoldComparison();
+    renderSignals(state.backtest.trades);
+    renderNextSignalTrigger();
+  }
   saveSettings();
   renderChart();
-  renderRsiChart();
+  renderStrategyIndicatorChart();
   renderVolumeChart();
 }
 
@@ -801,12 +952,16 @@ function renderChart() {
   ctx.textAlign = "left";
 }
 
-function renderRsiChart() {
-  const isRsiStrategy = els.strategySelect.value === "rsi";
+function renderStrategyIndicatorChart() {
+  const strategy = els.strategySelect.value;
+  const isRsiStrategy = strategy === "rsi";
   const rsiValues = state.backtest?.indicators?.rsi;
+  const highValues = state.backtest?.indicators?.highs;
+  const lowValues = state.backtest?.indicators?.lows;
   const hasRsiSeries = isRsiStrategy && Array.isArray(rsiValues);
-  els.rsiSection.hidden = !hasRsiSeries;
-  if (!hasRsiSeries) return;
+  const hasDonchianSeries = strategy === "breakout" && Array.isArray(highValues) && Array.isArray(lowValues);
+  els.rsiSection.hidden = !hasRsiSeries && !hasDonchianSeries;
+  if (!hasRsiSeries && !hasDonchianSeries) return;
 
   const canvas = els.rsiChart;
   const ctx = canvas.getContext("2d");
@@ -818,11 +973,17 @@ function renderRsiChart() {
   ctx.clearRect(0, 0, rect.width, 150);
 
   const visible = getVisibleWindow();
-  const series = visible.indexes.map((index) => rsiValues[index]);
   const params = getParams();
+  if (hasDonchianSeries) {
+    renderDonchianIndicatorChart(ctx, rect, visible, params, highValues, lowValues);
+    return;
+  }
+
+  const series = visible.indexes.map((index) => rsiValues[index]);
   const latestValue = [...series].reverse().find((value) => Number.isFinite(value));
+  els.indicatorTitle.textContent = "RSI";
   els.rsiSummary.textContent = Number.isFinite(latestValue)
-    ? `Latest RSI ${latestValue.toFixed(1)} · buy below ${params.buyBelow} · sell above ${params.sellAbove}`
+    ? `Latest RSI ${latestValue.toFixed(1)} - buy below ${params.buyBelow} - sell above ${params.sellAbove}`
     : "RSI values begin after the warm-up period for the selected range";
 
   const pad = { top: 12, right: 56, bottom: 26, left: 52 };
@@ -840,6 +1001,70 @@ function renderRsiChart() {
   ctx.textAlign = "right";
   ctx.fillText(visible.rows.at(-1)?.date || "", rect.width - pad.right, 142);
   ctx.textAlign = "left";
+}
+
+function renderDonchianIndicatorChart(ctx, rect, visible, params, highValues, lowValues) {
+  const closeSeries = visible.indexes.map((index) => state.backtest.rows[index].close);
+  const entrySeries = visible.indexes.map((index) => highValues[index]);
+  const exitSeries = visible.indexes.map((index) => lowValues[index]);
+  const values = [...closeSeries, ...entrySeries, ...exitSeries].filter((value) => Number.isFinite(value));
+  const latestEntry = [...entrySeries].reverse().find((value) => Number.isFinite(value));
+  const latestExit = [...exitSeries].reverse().find((value) => Number.isFinite(value));
+  const latestClose = [...closeSeries].reverse().find((value) => Number.isFinite(value));
+  const currency = currencyForSymbol(state.activeSymbol);
+
+  els.indicatorTitle.textContent = "Donchian Breakout";
+  els.rsiSummary.textContent =
+    Number.isFinite(latestEntry) && Number.isFinite(latestExit)
+      ? `Close ${money(latestClose, currency)} - entry above ${money(latestEntry, currency)} - exit below ${money(latestExit, currency)}`
+      : `Donchian channels begin after ${Math.max(params.lookback, params.exit)} bars`;
+
+  if (!values.length) return;
+
+  const pad = { top: 18, right: 72, bottom: 26, left: 52 };
+  const width = rect.width - pad.left - pad.right;
+  const height = 150 - pad.top - pad.bottom;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const x = (index) => pad.left + (index / Math.max(closeSeries.length - 1, 1)) * width;
+  const y = (value) => pad.top + (1 - (value - min) / span) * height;
+
+  drawGrid(ctx, pad, rect.width, 150, min, max);
+  drawLine(ctx, closeSeries, x, y, "#2364aa", 2);
+  drawLine(ctx, entrySeries, x, y, "#0f7a5a", 1.5);
+  drawLine(ctx, exitSeries, x, y, "#b9443f", 1.5);
+
+  drawLegend(ctx, pad.left, 14, [
+    { label: "Close", color: "#2364aa" },
+    { label: "Entry high", color: "#0f7a5a" },
+    { label: "Exit low", color: "#b9443f" },
+  ]);
+
+  ctx.fillStyle = "#627074";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText(visible.rows[0]?.date || "", pad.left, 142);
+  ctx.textAlign = "right";
+  ctx.fillText(visible.rows.at(-1)?.date || "", rect.width - pad.right, 142);
+  ctx.textAlign = "left";
+}
+
+function drawLegend(ctx, x, y, items) {
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  let offset = 0;
+  items.forEach((item) => {
+    ctx.strokeStyle = item.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x + offset, y);
+    ctx.lineTo(x + offset + 16, y);
+    ctx.stroke();
+    ctx.fillStyle = "#627074";
+    ctx.fillText(item.label, x + offset + 22, y);
+    offset += ctx.measureText(item.label).width + 50;
+  });
+  ctx.textBaseline = "alphabetic";
 }
 
 function drawRsiGrid(ctx, pad, fullWidth, y, buyBelow, sellAbove) {
@@ -1216,12 +1441,14 @@ function saveSettings() {
   }, 250);
 }
 
-async function selectSymbol(symbol, force = false) {
+async function selectSymbol(symbol, force = false, options = {}) {
   const dataKey = `${symbol}-${els.rangeSelect.value}`;
+  const previousSymbol = state.activeSymbol;
+  const shouldAutoLoadParams = options.autoLoadParams ?? symbol !== previousSymbol;
   state.activeSymbol = symbol;
   els.activeSymbol.textContent = marketDisplayName(symbol);
   renderWatchlist();
-  autoLoadSymbolParams();
+  if (shouldAutoLoadParams) autoLoadSymbolParams();
   updateSavedParamsButtons();
   state.data = await fetchMarketData(symbol, els.rangeSelect.value, force);
   els.activeSymbol.textContent = marketDisplayName(symbol);
@@ -1230,9 +1457,10 @@ async function selectSymbol(symbol, force = false) {
   renderMetrics(state.backtest.metrics);
   renderBuyHoldComparison();
   renderSignals(state.backtest.trades);
+  renderNextSignalTrigger();
   renderWatchlist();
   renderChart();
-  renderRsiChart();
+  renderStrategyIndicatorChart();
   renderVolumeChart();
   saveSettings();
 }
@@ -1246,11 +1474,12 @@ async function refreshAllSymbols() {
 }
 
 function removeSymbol(symbol) {
+  const wasActive = state.activeSymbol === symbol;
   state.watchlist = state.watchlist.filter((item) => item !== symbol);
   if (!state.watchlist.length) state.watchlist = ["AAPL"];
-  if (state.activeSymbol === symbol) state.activeSymbol = state.watchlist[0];
+  const nextSymbol = wasActive ? state.watchlist[0] : state.activeSymbol;
   saveWatchlist();
-  selectSymbol(state.activeSymbol);
+  selectSymbol(nextSymbol, false, { autoLoadParams: wasActive });
 }
 
 function saveWatchlist() {
@@ -1309,7 +1538,7 @@ els.strategySelect.addEventListener("change", () => {
   els.optimiseBtn.disabled = els.strategySelect.value === "buyhold";
   updateSavedParamsButtons();
   saveSettings();
-  selectSymbol(state.activeSymbol);
+  selectSymbol(state.activeSymbol, false, { autoLoadParams: true });
 });
 els.saveParamsBtn.addEventListener("click", saveSymbolParams);
 els.loadParamsBtn.addEventListener("click", loadSymbolParams);
@@ -1333,7 +1562,7 @@ els.volumeModeSelect.addEventListener("change", () => {
   renderVolumeChart();
 });
 window.addEventListener("resize", renderChart);
-window.addEventListener("resize", renderRsiChart);
+window.addEventListener("resize", renderStrategyIndicatorChart);
 window.addEventListener("resize", renderVolumeChart);
 
 document.querySelectorAll("[data-zoom-window]").forEach((button) => {

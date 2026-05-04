@@ -41,7 +41,7 @@ Use normal Yahoo Finance symbols such as `AAPL`, `MSFT`, `SPY`, or exchange suff
 
 Each strategy (except buy and hold) has tuneable parameters. The built-in optimiser searches parameter combinations for a selected stock and data range to maximise CAGR.
 
-The backtester reports total return, CAGR, max drawdown, Sharpe ratio, trade count, signal history, an optional buy-and-hold reference, and exportable CSV results.
+The backtester reports total return, CAGR, max drawdown, Sharpe ratio, trade count, signal history, an optional buy-and-hold reference, a next signal trigger estimate, and exportable CSV results.
 
 ## Notes
 

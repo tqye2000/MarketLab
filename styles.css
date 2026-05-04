@@ -530,6 +530,36 @@ canvas {
   height: 17px;
 }
 
+.next-signal-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: #fbfcfb;
+}
+
+.next-signal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.next-signal-header span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.next-signal-card p {
+  margin: 0;
+}
+
+.next-signal-card .source-note {
+  margin-top: 6px;
+}
+
 .signal-list {
   display: grid;
   gap: 8px;
@@ -562,6 +592,10 @@ canvas {
 
 .signal-action.sell {
   background: var(--red);
+}
+
+.signal-action.hold {
+  background: var(--muted);
 }
 
 .source-note {

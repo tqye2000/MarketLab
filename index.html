@@ -126,11 +126,11 @@
           <section id="rsiSection" class="rsi-section" hidden>
             <div class="rsi-header">
               <div>
-                <h2>RSI</h2>
+                <h2 id="indicatorTitle">RSI</h2>
                 <p id="rsiSummary">Relative Strength Index for the selected range</p>
               </div>
             </div>
-            <canvas id="rsiChart" class="rsi-chart" height="150" aria-label="RSI chart"></canvas>
+            <canvas id="rsiChart" class="rsi-chart" height="150" aria-label="Strategy indicator chart"></canvas>
           </section>
           <div class="volume-header">
             <div>
@@ -225,6 +225,14 @@
             <div class="panel-title">
               <h2>Signals</h2>
               <span id="signalCount">0</span>
+            </div>
+            <div id="nextSignalTrigger" class="next-signal-card">
+              <div class="next-signal-header">
+                <span>Next signal trigger</span>
+                <strong id="nextSignalAction">--</strong>
+              </div>
+              <p id="nextSignalSummary">Run a strategy test to calculate the next trigger.</p>
+              <p id="nextSignalDetail" class="source-note"></p>
             </div>
             <div id="signalList" class="signal-list"></div>
           </article>
