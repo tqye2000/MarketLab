@@ -99,7 +99,7 @@ function sanitizeSettings(input) {
     activeSymbol: String(settings.activeSymbol || defaults.activeSymbol).trim().toUpperCase(),
     rangeYears: ["1", "2", "3", "5", "10"].includes(String(settings.rangeYears)) ? String(settings.rangeYears) : defaults.rangeYears,
     startingCapital: Math.max(Number(settings.startingCapital) || defaults.startingCapital, 100),
-    strategy: ["sma", "rsi", "breakout", "buyhold"].includes(String(settings.strategy)) ? String(settings.strategy) : defaults.strategy,
+    strategy: ["sma", "rsi", "breakout", "macd", "buyhold"].includes(String(settings.strategy)) ? String(settings.strategy) : defaults.strategy,
     strategyParams: settings.strategyParams && typeof settings.strategyParams === "object" ? settings.strategyParams : {},
     savedSymbolParams: settings.savedSymbolParams && typeof settings.savedSymbolParams === "object" ? settings.savedSymbolParams : {},
     longOnly: Boolean(settings.longOnly),

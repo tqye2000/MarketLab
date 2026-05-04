@@ -151,6 +151,11 @@ const strategyParams = {
     { key: "lookback", label: "Lookback days", value: 55, min: 5, max: 250 },
     { key: "exit", label: "Exit days", value: 20, min: 3, max: 160 },
   ],
+  macd: [
+    { key: "fast", label: "Fast EMA", value: 12, min: 2, max: 80 },
+    { key: "slow", label: "Slow EMA", value: 26, min: 3, max: 160 },
+    { key: "signal", label: "Signal EMA", value: 9, min: 2, max: 80 },
+  ],
   buyhold: [],
 };
 
@@ -240,6 +245,34 @@ function movingAverage(values, period) {
   return result;
 }
 
+function exponentialMovingAverage(values, period) {
+  const result = Array(values.length).fill(null);
+  period = Math.max(Math.round(Number(period)) || 0, 0);
+  if (period < 1) return result;
+  const alpha = 2 / (period + 1);
+  let count = 0;
+  let sum = 0;
+  let average = null;
+
+  for (let i = 0; i < values.length; i += 1) {
+    const value = values[i];
+    if (!Number.isFinite(value)) continue;
+    if (average === null) {
+      count += 1;
+      sum += value;
+      if (count === period) {
+        average = sum / period;
+        result[i] = average;
+      }
+    } else {
+      average = alpha * value + (1 - alpha) * average;
+      result[i] = average;
+    }
+  }
+
+  return result;
+}
+
 function rsi(values, period) {
   const result = Array(values.length).fill(null);
   let avgGain = 0;
@@ -259,6 +292,20 @@ function rsi(values, period) {
     }
   }
   return result;
+}
+
+function buildMacd(values, fastPeriod, slowPeriod, signalPeriod) {
+  const fast = exponentialMovingAverage(values, fastPeriod);
+  const slow = exponentialMovingAverage(values, slowPeriod);
+  const macdLine = values.map((_, index) =>
+    Number.isFinite(fast[index]) && Number.isFinite(slow[index]) ? fast[index] - slow[index] : null
+  );
+  const signalLine = exponentialMovingAverage(macdLine, signalPeriod);
+  const histogram = macdLine.map((value, index) =>
+    Number.isFinite(value) && Number.isFinite(signalLine[index]) ? value - signalLine[index] : null
+  );
+
+  return { fast, slow, macdLine, signalLine, histogram };
 }
 
 function rollingHigh(rows, period) {
@@ -330,6 +377,18 @@ function buildSignalSeries(rows, options) {
     }
   }
 
+  if (strategy === "macd") {
+    const values = buildMacd(closes, params.fast, params.slow, params.signal);
+    indicators.fast = values.fast;
+    indicators.slow = values.slow;
+    indicators.macd = values.macdLine;
+    indicators.signal = values.signalLine;
+    indicators.histogram = values.histogram;
+    for (let i = 1; i < rows.length; i += 1) {
+      target[i] = Number.isFinite(values.macdLine[i]) && Number.isFinite(values.signalLine[i]) && values.macdLine[i] > values.signalLine[i] ? 1 : 0;
+    }
+  }
+
   if (!longOnly) {
     for (let i = 0; i < target.length; i += 1) {
       target[i] = target[i] === 1 ? 1 : -1;
@@ -394,6 +453,7 @@ const optimiserDefaults = {
   rsi: { period: { min: 5, max: 30, step: 1 }, buyBelow: { min: 10, max: 40, step: 5 }, sellAbove: { min: 50, max: 90, step: 5 } },
   sma: { fast: { min: 5, max: 50, step: 5 }, slow: { min: 20, max: 200, step: 5 } },
   breakout: { lookback: { min: 10, max: 100, step: 5 }, exit: { min: 5, max: 50, step: 5 } },
+  macd: { fast: { min: 6, max: 18, step: 2 }, slow: { min: 20, max: 40, step: 2 }, signal: { min: 5, max: 15, step: 2 } },
 };
 
 const MAX_COMBINATIONS = 50000;
@@ -416,6 +476,8 @@ function generateParamGrid(strategy, ranges) {
   const recurse = (depth, combo) => {
     if (depth === keys.length) {
       if (strategy === "rsi" && combo.buyBelow >= combo.sellAbove) return;
+      if (strategy === "sma" && combo.fast >= combo.slow) return;
+      if (strategy === "macd" && combo.fast >= combo.slow) return;
       grid.push({ ...combo });
       return;
     }
@@ -687,7 +749,9 @@ function buildNextSignalTrigger(rows) {
       ? nextSmaTrigger(rows, params, basePosition)
       : strategy === "rsi"
         ? nextRsiTrigger(rows, params, basePosition)
-        : nextBreakoutTrigger(rows, params, basePosition);
+        : strategy === "macd"
+          ? nextMacdTrigger(rows, params, basePosition)
+          : nextBreakoutTrigger(rows, params, basePosition);
 
   if (!trigger) {
     return {
@@ -756,6 +820,36 @@ function nextRsiTrigger(rows, params, basePosition) {
   const level = latestClose + (period - 1) * (averages.avgLoss - averages.avgGain / rs);
   if (!Number.isFinite(level)) return null;
   return { level, operator: "below", detail: `RSI entry triggers when next RSI falls below ${params.buyBelow}.` };
+}
+
+function nextMacdTrigger(rows, params, basePosition) {
+  const fastPeriod = Number(params.fast);
+  const slowPeriod = Number(params.slow);
+  const signalPeriod = Number(params.signal);
+  if (fastPeriod >= slowPeriod || signalPeriod <= 1) return null;
+
+  const closes = rows.map((row) => row.close);
+  const values = buildMacd(closes, fastPeriod, slowPeriod, signalPeriod);
+  const fastEma = values.fast.at(-1);
+  const slowEma = values.slow.at(-1);
+  const signalLine = values.signalLine.at(-1);
+  if (!Number.isFinite(fastEma) || !Number.isFinite(slowEma) || !Number.isFinite(signalLine)) return null;
+
+  const fastAlpha = 2 / (fastPeriod + 1);
+  const slowAlpha = 2 / (slowPeriod + 1);
+  const slope = fastAlpha - slowAlpha;
+  if (slope === 0) return null;
+
+  const offset = (1 - fastAlpha) * fastEma - (1 - slowAlpha) * slowEma;
+  const level = (signalLine - offset) / slope;
+  if (!Number.isFinite(level)) return null;
+
+  const operator = basePosition ? (slope > 0 ? "below" : "above") : (slope > 0 ? "above" : "below");
+  return {
+    level,
+    operator,
+    detail: `MACD crossover compares the next ${fastPeriod}/${slowPeriod} EMA spread with the ${signalPeriod}-day signal line.`,
+  };
 }
 
 function rsiAverages(values, period) {
@@ -964,10 +1058,14 @@ function renderStrategyIndicatorChart() {
   const rsiValues = state.backtest?.indicators?.rsi;
   const highValues = state.backtest?.indicators?.highs;
   const lowValues = state.backtest?.indicators?.lows;
+  const macdValues = state.backtest?.indicators?.macd;
+  const signalValues = state.backtest?.indicators?.signal;
+  const histogramValues = state.backtest?.indicators?.histogram;
   const hasRsiSeries = isRsiStrategy && Array.isArray(rsiValues);
   const hasDonchianSeries = strategy === "breakout" && Array.isArray(highValues) && Array.isArray(lowValues);
-  els.rsiSection.hidden = !hasRsiSeries && !hasDonchianSeries;
-  if (!hasRsiSeries && !hasDonchianSeries) return;
+  const hasMacdSeries = strategy === "macd" && Array.isArray(macdValues) && Array.isArray(signalValues);
+  els.rsiSection.hidden = !hasRsiSeries && !hasDonchianSeries && !hasMacdSeries;
+  if (!hasRsiSeries && !hasDonchianSeries && !hasMacdSeries) return;
 
   const canvas = els.rsiChart;
   const ctx = canvas.getContext("2d");
@@ -980,6 +1078,10 @@ function renderStrategyIndicatorChart() {
 
   const visible = getVisibleWindow();
   const params = getParams();
+  if (hasMacdSeries) {
+    renderMacdIndicatorChart(ctx, rect, visible, params, macdValues, signalValues, histogramValues || []);
+    return;
+  }
   if (hasDonchianSeries) {
     renderDonchianIndicatorChart(ctx, rect, visible, params, highValues, lowValues);
     return;
@@ -1000,6 +1102,64 @@ function renderStrategyIndicatorChart() {
 
   drawRsiGrid(ctx, pad, rect.width, y, params.buyBelow, params.sellAbove);
   drawLine(ctx, series, x, y, "#2364aa", 2);
+
+  ctx.fillStyle = "#627074";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText(visible.rows[0]?.date || "", pad.left, 142);
+  ctx.textAlign = "right";
+  ctx.fillText(visible.rows.at(-1)?.date || "", rect.width - pad.right, 142);
+  ctx.textAlign = "left";
+}
+
+function renderMacdIndicatorChart(ctx, rect, visible, params, macdValues, signalValues, histogramValues) {
+  const macdSeries = visible.indexes.map((index) => macdValues[index]);
+  const signalSeries = visible.indexes.map((index) => signalValues[index]);
+  const histogramSeries = visible.indexes.map((index) => histogramValues[index]);
+  const values = [...macdSeries, ...signalSeries, ...histogramSeries, 0].filter((value) => Number.isFinite(value));
+  const latestMacd = [...macdSeries].reverse().find((value) => Number.isFinite(value));
+  const latestSignal = [...signalSeries].reverse().find((value) => Number.isFinite(value));
+
+  els.indicatorTitle.textContent = "MACD";
+  els.rsiSummary.textContent =
+    Number.isFinite(latestMacd) && Number.isFinite(latestSignal)
+      ? `Latest MACD ${latestMacd.toFixed(2)} - signal ${latestSignal.toFixed(2)} - EMAs ${params.fast}/${params.slow}/${params.signal}`
+      : `MACD values begin after the ${params.slow}-bar slow EMA and ${params.signal}-bar signal warm-up`;
+
+  if (!values.length) return;
+
+  const pad = { top: 18, right: 72, bottom: 26, left: 52 };
+  const width = rect.width - pad.left - pad.right;
+  const height = 150 - pad.top - pad.bottom;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const x = (index) => pad.left + (index / Math.max(macdSeries.length - 1, 1)) * width;
+  const y = (value) => pad.top + (1 - (value - min) / span) * height;
+  const zeroY = y(0);
+  const barWidth = Math.max(width / Math.max(histogramSeries.length, 1) - 1, 1);
+
+  drawGrid(ctx, pad, rect.width, 150, min, max);
+  ctx.strokeStyle = "#7d8b8f";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad.left, zeroY);
+  ctx.lineTo(rect.width - pad.right, zeroY);
+  ctx.stroke();
+
+  histogramSeries.forEach((value, index) => {
+    if (!Number.isFinite(value)) return;
+    const valueY = y(value);
+    ctx.fillStyle = value >= 0 ? "rgba(15, 122, 90, 0.35)" : "rgba(185, 68, 63, 0.35)";
+    ctx.fillRect(x(index) - barWidth / 2, Math.min(valueY, zeroY), barWidth, Math.max(Math.abs(zeroY - valueY), 1));
+  });
+
+  drawLine(ctx, macdSeries, x, y, "#2364aa", 2);
+  drawLine(ctx, signalSeries, x, y, "#b7791f", 1.5);
+  drawLegend(ctx, pad.left, 14, [
+    { label: "MACD", color: "#2364aa" },
+    { label: "Signal", color: "#b7791f" },
+    { label: "Histogram", color: "#0f7a5a" },
+  ]);
 
   ctx.fillStyle = "#627074";
   ctx.font = "12px system-ui, sans-serif";

@@ -28,6 +28,11 @@
     "breakout": {
       "lookback": 40,
       "exit": 40
+    },
+    "macd": {
+      "fast": 12,
+      "slow": 26,
+      "signal": 9
     }
   },
   "savedSymbolParams": {

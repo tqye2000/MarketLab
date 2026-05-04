@@ -37,6 +37,7 @@ Use normal Yahoo Finance symbols such as `AAPL`, `MSFT`, `SPY`, or exchange suff
 - SMA crossover
 - RSI mean reversion
 - Donchian breakout
+- MACD crossover
 - Buy and hold
 
 Each strategy (except buy and hold) has tuneable parameters. The built-in optimiser searches parameter combinations for a selected stock and data range to maximise CAGR.
