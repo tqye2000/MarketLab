@@ -938,9 +938,15 @@ function renderChart() {
     const fullIndex = state.backtest.rows.findIndex((row) => row.date === trade.date);
     const index = visible.indexes.indexOf(fullIndex);
     if (index < 0) return;
+    const markerValue =
+      mode === "equity"
+        ? state.backtest.equity[fullIndex]
+        : mode === "drawdown"
+          ? state.backtest.drawdown[fullIndex] * 100
+          : trade.price;
     ctx.fillStyle = trade.action === "BUY" ? "#0f7a5a" : "#b9443f";
     ctx.beginPath();
-    ctx.arc(x(index), y(mode === "equity" ? state.backtest.equity[fullIndex] : mode === "drawdown" ? state.backtest.drawdown[fullIndex] * 100 : state.backtest.rows[fullIndex].close), 4, 0, Math.PI * 2);
+    ctx.arc(x(index), y(markerValue), 4, 0, Math.PI * 2);
     ctx.fill();
   });
 
@@ -1547,8 +1553,8 @@ els.exportBtn.addEventListener("click", exportBacktest);
 els.zoomStartInput.addEventListener("change", () => setZoom(els.zoomStartInput.value, els.zoomEndInput.value));
 els.zoomEndInput.addEventListener("change", () => setZoom(els.zoomStartInput.value, els.zoomEndInput.value));
 els.zoomResetBtn.addEventListener("click", () => {
-  if (!state.backtest?.rows.length) return;
-  const rows = state.backtest.rows;
+  const rows = state.data.length ? state.data : state.backtest?.rows || [];
+  if (!rows.length) return;
   setZoom(rows[0].date, rows.at(-1).date);
 });
 els.volumeIntervalSelect.addEventListener("change", () => {
