@@ -33,6 +33,10 @@
       "fast": 12,
       "slow": 26,
       "signal": 9
+    },
+    "bollinger": {
+      "period": 20,
+      "deviation": 2
     }
   },
   "savedSymbolParams": {

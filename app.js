@@ -156,6 +156,10 @@ const strategyParams = {
     { key: "slow", label: "Slow EMA", value: 26, min: 3, max: 160 },
     { key: "signal", label: "Signal EMA", value: 9, min: 2, max: 80 },
   ],
+  bollinger: [
+    { key: "period", label: "Band period", value: 20, min: 5, max: 120 },
+    { key: "deviation", label: "Std devs", value: 2, min: 0.5, max: 4, step: 0.5 },
+  ],
   buyhold: [],
 };
 
@@ -236,11 +240,38 @@ function parseCsv(text) {
 
 function movingAverage(values, period) {
   const result = Array(values.length).fill(null);
+  period = Math.max(Math.round(Number(period)) || 0, 0);
+  if (period < 1) return result;
   let sum = 0;
   for (let i = 0; i < values.length; i += 1) {
     sum += values[i];
     if (i >= period) sum -= values[i - period];
     if (i >= period - 1) result[i] = sum / period;
+  }
+  return result;
+}
+
+function rollingStdDev(values, period) {
+  const result = Array(values.length).fill(null);
+  period = Math.max(Math.round(Number(period)) || 0, 0);
+  if (period < 1) return result;
+
+  let sum = 0;
+  let sumSquares = 0;
+  for (let i = 0; i < values.length; i += 1) {
+    const value = values[i];
+    sum += value;
+    sumSquares += value * value;
+    if (i >= period) {
+      const old = values[i - period];
+      sum -= old;
+      sumSquares -= old * old;
+    }
+    if (i >= period - 1) {
+      const mean = sum / period;
+      const variance = Math.max(sumSquares / period - mean * mean, 0);
+      result[i] = Math.sqrt(variance);
+    }
   }
   return result;
 }
@@ -306,6 +337,20 @@ function buildMacd(values, fastPeriod, slowPeriod, signalPeriod) {
   );
 
   return { fast, slow, macdLine, signalLine, histogram };
+}
+
+function buildBollingerBands(values, period, deviation) {
+  const middle = movingAverage(values, period);
+  const stdDev = rollingStdDev(values, period);
+  const width = Number(deviation);
+  const upper = values.map((_, index) =>
+    Number.isFinite(middle[index]) && Number.isFinite(stdDev[index]) ? middle[index] + stdDev[index] * width : null
+  );
+  const lower = values.map((_, index) =>
+    Number.isFinite(middle[index]) && Number.isFinite(stdDev[index]) ? middle[index] - stdDev[index] * width : null
+  );
+
+  return { middle, upper, lower };
 }
 
 function rollingHigh(rows, period) {
@@ -389,6 +434,19 @@ function buildSignalSeries(rows, options) {
     }
   }
 
+  if (strategy === "bollinger") {
+    const bands = buildBollingerBands(closes, params.period, params.deviation);
+    indicators.bbMiddle = bands.middle;
+    indicators.bbUpper = bands.upper;
+    indicators.bbLower = bands.lower;
+    let position = 0;
+    for (let i = 1; i < rows.length; i += 1) {
+      if (Number.isFinite(bands.lower[i]) && rows[i].close < bands.lower[i]) position = 1;
+      if (Number.isFinite(bands.middle[i]) && rows[i].close > bands.middle[i]) position = 0;
+      target[i] = position;
+    }
+  }
+
   if (!longOnly) {
     for (let i = 0; i < target.length; i += 1) {
       target[i] = target[i] === 1 ? 1 : -1;
@@ -454,6 +512,7 @@ const optimiserDefaults = {
   sma: { fast: { min: 5, max: 50, step: 5 }, slow: { min: 20, max: 200, step: 5 } },
   breakout: { lookback: { min: 10, max: 100, step: 5 }, exit: { min: 5, max: 50, step: 5 } },
   macd: { fast: { min: 6, max: 18, step: 2 }, slow: { min: 20, max: 40, step: 2 }, signal: { min: 5, max: 15, step: 2 } },
+  bollinger: { period: { min: 10, max: 40, step: 5 }, deviation: { min: 1.5, max: 3, step: 0.5 } },
 };
 
 const MAX_COMBINATIONS = 50000;
@@ -468,7 +527,7 @@ function generateParamGrid(strategy, ranges) {
   const axes = keys.map((k) => {
     const r = ranges[k];
     const values = [];
-    for (let v = r.min; v <= r.max; v += r.step) values.push(v);
+    for (let v = r.min; v <= r.max + r.step / 1000; v += r.step) values.push(Number(v.toFixed(6)));
     return values;
   });
 
@@ -538,7 +597,7 @@ function renderParamInputs() {
     .map((param) => `
       <label>
         ${param.label}
-        <input name="${param.key}" type="number" min="${param.min}" max="${param.max}" step="1" value="${savedParams[param.key] ?? param.value}">
+        <input name="${param.key}" type="number" min="${param.min}" max="${param.max}" step="${param.step ?? 1}" value="${savedParams[param.key] ?? param.value}">
       </label>
     `)
     .join("");
@@ -751,7 +810,9 @@ function buildNextSignalTrigger(rows) {
         ? nextRsiTrigger(rows, params, basePosition)
         : strategy === "macd"
           ? nextMacdTrigger(rows, params, basePosition)
-          : nextBreakoutTrigger(rows, params, basePosition);
+          : strategy === "bollinger"
+            ? nextBollingerTrigger(rows, params, basePosition)
+            : nextBreakoutTrigger(rows, params, basePosition);
 
   if (!trigger) {
     return {
@@ -849,6 +910,29 @@ function nextMacdTrigger(rows, params, basePosition) {
     level,
     operator,
     detail: `MACD crossover compares the next ${fastPeriod}/${slowPeriod} EMA spread with the ${signalPeriod}-day signal line.`,
+  };
+}
+
+function nextBollingerTrigger(rows, params, basePosition) {
+  const closes = rows.map((row) => row.close);
+  const bands = buildBollingerBands(closes, params.period, params.deviation);
+  const middle = bands.middle.at(-1);
+  const lower = bands.lower.at(-1);
+
+  if (basePosition) {
+    if (!Number.isFinite(middle)) return null;
+    return {
+      level: middle,
+      operator: "above",
+      detail: `Bollinger exit uses the latest ${params.period}-bar middle band. The next bar's live band will move as price changes.`,
+    };
+  }
+
+  if (!Number.isFinite(lower)) return null;
+  return {
+    level: lower,
+    operator: "below",
+    detail: `Bollinger entry uses the latest lower band at ${params.deviation} standard deviations below the ${params.period}-bar average. The next bar's live band will move as price changes.`,
   };
 }
 
@@ -1061,11 +1145,15 @@ function renderStrategyIndicatorChart() {
   const macdValues = state.backtest?.indicators?.macd;
   const signalValues = state.backtest?.indicators?.signal;
   const histogramValues = state.backtest?.indicators?.histogram;
+  const bbMiddleValues = state.backtest?.indicators?.bbMiddle;
+  const bbUpperValues = state.backtest?.indicators?.bbUpper;
+  const bbLowerValues = state.backtest?.indicators?.bbLower;
   const hasRsiSeries = isRsiStrategy && Array.isArray(rsiValues);
   const hasDonchianSeries = strategy === "breakout" && Array.isArray(highValues) && Array.isArray(lowValues);
   const hasMacdSeries = strategy === "macd" && Array.isArray(macdValues) && Array.isArray(signalValues);
-  els.rsiSection.hidden = !hasRsiSeries && !hasDonchianSeries && !hasMacdSeries;
-  if (!hasRsiSeries && !hasDonchianSeries && !hasMacdSeries) return;
+  const hasBollingerSeries = strategy === "bollinger" && Array.isArray(bbMiddleValues) && Array.isArray(bbUpperValues) && Array.isArray(bbLowerValues);
+  els.rsiSection.hidden = !hasRsiSeries && !hasDonchianSeries && !hasMacdSeries && !hasBollingerSeries;
+  if (!hasRsiSeries && !hasDonchianSeries && !hasMacdSeries && !hasBollingerSeries) return;
 
   const canvas = els.rsiChart;
   const ctx = canvas.getContext("2d");
@@ -1080,6 +1168,10 @@ function renderStrategyIndicatorChart() {
   const params = getParams();
   if (hasMacdSeries) {
     renderMacdIndicatorChart(ctx, rect, visible, params, macdValues, signalValues, histogramValues || []);
+    return;
+  }
+  if (hasBollingerSeries) {
+    renderBollingerIndicatorChart(ctx, rect, visible, params, bbMiddleValues, bbUpperValues, bbLowerValues);
     return;
   }
   if (hasDonchianSeries) {
@@ -1102,6 +1194,55 @@ function renderStrategyIndicatorChart() {
 
   drawRsiGrid(ctx, pad, rect.width, y, params.buyBelow, params.sellAbove);
   drawLine(ctx, series, x, y, "#2364aa", 2);
+
+  ctx.fillStyle = "#627074";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText(visible.rows[0]?.date || "", pad.left, 142);
+  ctx.textAlign = "right";
+  ctx.fillText(visible.rows.at(-1)?.date || "", rect.width - pad.right, 142);
+  ctx.textAlign = "left";
+}
+
+function renderBollingerIndicatorChart(ctx, rect, visible, params, middleValues, upperValues, lowerValues) {
+  const closeSeries = visible.indexes.map((index) => state.backtest.rows[index].close);
+  const middleSeries = visible.indexes.map((index) => middleValues[index]);
+  const upperSeries = visible.indexes.map((index) => upperValues[index]);
+  const lowerSeries = visible.indexes.map((index) => lowerValues[index]);
+  const values = [...closeSeries, ...middleSeries, ...upperSeries, ...lowerSeries].filter((value) => Number.isFinite(value));
+  const latestClose = [...closeSeries].reverse().find((value) => Number.isFinite(value));
+  const latestMiddle = [...middleSeries].reverse().find((value) => Number.isFinite(value));
+  const latestLower = [...lowerSeries].reverse().find((value) => Number.isFinite(value));
+  const currency = currencyForSymbol(state.activeSymbol);
+
+  els.indicatorTitle.textContent = "Bollinger Bands";
+  els.rsiSummary.textContent =
+    Number.isFinite(latestMiddle) && Number.isFinite(latestLower)
+      ? `Close ${money(latestClose, currency)} - buy below ${money(latestLower, currency)} - exit above ${money(latestMiddle, currency)}`
+      : `Bollinger bands begin after the ${params.period}-bar warm-up`;
+
+  if (!values.length) return;
+
+  const pad = { top: 18, right: 72, bottom: 26, left: 52 };
+  const width = rect.width - pad.left - pad.right;
+  const height = 150 - pad.top - pad.bottom;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const x = (index) => pad.left + (index / Math.max(closeSeries.length - 1, 1)) * width;
+  const y = (value) => pad.top + (1 - (value - min) / span) * height;
+
+  drawGrid(ctx, pad, rect.width, 150, min, max);
+  drawLine(ctx, closeSeries, x, y, "#2364aa", 2);
+  drawLine(ctx, upperSeries, x, y, "#b9443f", 1.5);
+  drawLine(ctx, middleSeries, x, y, "#b7791f", 1.5);
+  drawLine(ctx, lowerSeries, x, y, "#0f7a5a", 1.5);
+
+  drawLegend(ctx, pad.left, 14, [
+    { label: "Close", color: "#2364aa" },
+    { label: "Upper", color: "#b9443f" },
+    { label: "Middle", color: "#b7791f" },
+    { label: "Lower", color: "#0f7a5a" },
+  ]);
 
   ctx.fillStyle = "#627074";
   ctx.font = "12px system-ui, sans-serif";
@@ -1765,7 +1906,7 @@ function renderOptimiserRanges() {
         <span class="range-label">${label}</span>
         <label>Min <input name="${key}-min" type="number" value="${r.min}" step="1"></label>
         <label>Max <input name="${key}-max" type="number" value="${r.max}" step="1"></label>
-        <label>Step <input name="${key}-step" type="number" value="${r.step}" min="1" step="1"></label>
+        <label>Step <input name="${key}-step" type="number" value="${r.step}" min="0.1" step="any"></label>
       </div>`;
   }).join("");
 }
@@ -1780,7 +1921,7 @@ function readOptimiserRanges() {
     const max = Number(els.optimiserRanges.querySelector(`[name="${key}-max"]`).value);
     const step = Number(els.optimiserRanges.querySelector(`[name="${key}-step"]`).value);
     if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(step)) return null;
-    if (step < 1 || min > max) return null;
+    if (step <= 0 || min > max) return null;
     ranges[key] = { min, max, step };
   }
   return ranges;
