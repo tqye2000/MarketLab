@@ -24,6 +24,21 @@ The app saves your watchlist and UI parameters to `data/settings.json` through t
 
 Strategy parameters can also be saved per stock. Click **Save params** in the Strategy Lab to store the current parameters for the active symbol and strategy. When you switch back to that stock, the saved parameters are restored automatically. The optimiser's **Apply best parameters** button also saves the result per stock.
 
+## Holdings
+
+Use **My holdings** to add a stock symbol, share quantity (including fractional shares), and average purchase price per share. **Edit** changes an existing position; **Remove** only deletes the local record, never places a trade. Holdings are saved with your local settings and browser backup. Old settings without holdings remain compatible.
+
+Average price must be entered in the quote's currency/units: for example, a GBX quote uses pence, not GBP pounds. Each row shows the latest available close and its date, current value (shares × close), and unrealised gain/loss relative to average cost. Values exclude fees, dividends and taxes; there is no FX conversion or mixed-currency portfolio total. **Refresh prices** reloads market data. Failed requests leave valuations and guidance unavailable rather than substituting demo prices.
+
+Click **Analyse** on a holding, then select a strategy and parameters in **Strategy Lab**. The holding card updates automatically and uses the full latest loaded history, independent of backtest chart zoom. It evaluates the exit rule for shares you already own, even if the simulated strategy never bought them. Holdings remain long positions when backtest short mode is enabled.
+
+- **HOLD**: the exit rule is not currently met; the card shows the next-close sell threshold where one exists.
+- **SELL**: the latest close meets the exit rule; that close is a reference price, not an executable quote.
+- **UNAVAILABLE**: market data, indicator warmup, or parameters are insufficient; refresh, increase the data range, or correct the inputs.
+- **Buy and hold** deliberately has no rule-based sell price.
+
+Thresholds change with each new bar. These are closing-price conditions, not intraday limit/stop orders or profit forecasts. Average cost affects P/L, not the technical exit rules. Confirm quote dates and broker prices before making a decision.
+
 ## Data Source
 
 The app requests daily OHLCV data through a tiny local Node server from Yahoo Finance's public chart endpoint:

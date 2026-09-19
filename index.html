@@ -63,6 +63,47 @@
           </div>
         </header>
 
+        <section class="panel holdings-panel" aria-labelledby="holdingsTitle">
+          <div class="panel-title">
+            <h2 id="holdingsTitle">My holdings</h2>
+            <button id="refreshHoldingsBtn" class="secondary-button" type="button">Refresh prices</button>
+          </div>
+          <form id="holdingForm" class="holding-form">
+            <label>Stock symbol
+              <input id="holdingSymbolInput" type="text" maxlength="40" pattern="[A-Za-z0-9.^=:_\-]+" placeholder="AAPL" autocomplete="off" required>
+            </label>
+            <label>Shares
+              <input id="holdingQuantityInput" type="number" min="0.00000001" step="any" placeholder="10" required>
+            </label>
+            <label>Average price / share
+              <input id="holdingAverageInput" type="number" min="0.00000001" step="any" placeholder="150.00" required>
+            </label>
+            <div class="holding-form-actions">
+              <button id="saveHoldingBtn" type="submit">Add holding</button>
+              <button id="cancelHoldingBtn" class="secondary-button" type="button" hidden>Cancel</button>
+            </div>
+          </form>
+          <p class="source-note">Enter average price in the stock's quote currency (London prices commonly use GBX/pence, not pounds). Value = shares × latest close; prices are delayed, not live. No currency conversion is applied.</p>
+          <p id="holdingsMessage" class="source-note" role="status"></p>
+          <div class="holdings-table-wrap">
+            <table class="holdings-table">
+              <caption class="source-note">Your positions — select Analyse to use the strategy chosen in Strategy Lab below.</caption>
+              <thead><tr><th>Stock</th><th>Shares</th><th>Avg price</th><th>Latest close</th><th>Current value</th><th>Unrealised P/L</th><th>Actions</th></tr></thead>
+              <tbody id="holdingsBody"></tbody>
+            </table>
+          </div>
+          <section class="holding-analysis" aria-labelledby="holdingAnalysisTitle" aria-live="polite">
+            <div class="next-signal-header">
+              <h3 id="holdingAnalysisTitle">Holding analysis</h3>
+              <strong id="holdingDecision" class="signal-action hold">--</strong>
+            </div>
+            <p id="holdingReason">Add or select a holding to analyse its exit rules.</p>
+            <p id="holdingExit" class="holding-exit"></p>
+            <p id="holdingAnalysisDetail" class="source-note"></p>
+            <p class="source-note">Rule-based research, not personalised financial advice. A closing-price trigger is not a limit order or guaranteed execution price; gaps, fees and taxes affect proceeds. No orders are placed.</p>
+          </section>
+        </section>
+
         <section class="metrics-grid" aria-label="Strategy metrics">
           <article class="metric-card">
             <span>Total return</span>

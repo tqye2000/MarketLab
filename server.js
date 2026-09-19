@@ -6,6 +6,15 @@ const PORT = resolvePort();
 const PUBLIC_DIR = __dirname;
 const DATA_DIR = path.join(PUBLIC_DIR, "data");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
+const PUBLIC_FILES = new Set(["/index.html", "/styles.css", "/app.js"]);
+const PARAM_KEYS = {
+  sma: ["fast", "slow"],
+  rsi: ["period", "buyBelow", "sellAbove"],
+  breakout: ["lookback", "exit"],
+  macd: ["fast", "slow", "signal"],
+  bollinger: ["period", "deviation"],
+  buyhold: [],
+};
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -60,6 +69,7 @@ function readJsonBody(req) {
 function defaultSettings() {
   return {
     watchlist: ["AAPL", "MSFT", "NVDA", "SPY"],
+    holdings: [],
     activeSymbol: "AAPL",
     rangeYears: "3",
     startingCapital: 10000,
@@ -81,10 +91,23 @@ function readSettings() {
   try {
     if (!fs.existsSync(SETTINGS_FILE)) return defaultSettings();
     const parsed = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf-8"));
-    return { ...defaultSettings(), ...parsed };
+    return sanitizeSettings(parsed);
   } catch {
     return defaultSettings();
   }
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function sanitizeStrategyParams(value) {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(Object.entries(PARAM_KEYS)
+    .filter(([strategy]) => Object.hasOwn(value, strategy) && isRecord(value[strategy]))
+    .map(([strategy, keys]) => [strategy, Object.fromEntries(keys
+      .filter((key) => Number.isFinite(value[strategy][key]))
+      .map((key) => [key, value[strategy][key]]))]));
 }
 
 function sanitizeSettings(input) {
@@ -96,12 +119,17 @@ function sanitizeSettings(input) {
 
   return {
     watchlist: watchlist.length ? [...new Set(watchlist)] : defaults.watchlist,
+    holdings: sanitizeHoldings(settings.holdings),
     activeSymbol: String(settings.activeSymbol || defaults.activeSymbol).trim().toUpperCase(),
     rangeYears: ["1", "2", "3", "5", "10"].includes(String(settings.rangeYears)) ? String(settings.rangeYears) : defaults.rangeYears,
     startingCapital: Math.max(Number(settings.startingCapital) || defaults.startingCapital, 100),
     strategy: ["sma", "rsi", "breakout", "macd", "bollinger", "buyhold"].includes(String(settings.strategy)) ? String(settings.strategy) : defaults.strategy,
-    strategyParams: settings.strategyParams && typeof settings.strategyParams === "object" ? settings.strategyParams : {},
-    savedSymbolParams: settings.savedSymbolParams && typeof settings.savedSymbolParams === "object" ? settings.savedSymbolParams : {},
+    strategyParams: sanitizeStrategyParams(settings.strategyParams),
+    savedSymbolParams: isRecord(settings.savedSymbolParams)
+      ? Object.fromEntries(Object.entries(settings.savedSymbolParams)
+        .filter(([symbol, strategies]) => /^[A-Z0-9.^=:_-]+$/i.test(symbol) && isRecord(strategies))
+        .map(([symbol, strategies]) => [symbol.toUpperCase(), sanitizeStrategyParams(strategies)]))
+      : {},
     longOnly: Boolean(settings.longOnly),
     includeFees: Boolean(settings.includeFees),
     showBuyHoldComparison: Boolean(settings.showBuyHoldComparison),
@@ -113,6 +141,21 @@ function sanitizeSettings(input) {
   };
 }
 
+function sanitizeHoldings(value) {
+  if (!Array.isArray(value)) return [];
+  const holdings = new Map();
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.symbol !== "string") continue;
+    const symbol = item.symbol.trim().toUpperCase();
+    if (!/^[A-Z0-9.^=:_-]{1,40}$/.test(symbol)) continue;
+    if (!Number.isFinite(item.quantity) || item.quantity <= 0 ||
+        !Number.isFinite(item.averagePrice) || item.averagePrice <= 0 ||
+        !Number.isFinite(item.quantity * item.averagePrice)) continue;
+    holdings.set(symbol, { symbol, quantity: item.quantity, averagePrice: item.averagePrice });
+  }
+  return [...holdings.values()];
+}
+
 function writeSettings(settings) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.writeFileSync(SETTINGS_FILE, `${JSON.stringify(sanitizeSettings(settings), null, 2)}\n`);
@@ -120,8 +163,8 @@ function writeSettings(settings) {
 
 function safeFilePath(urlPath) {
   const requested = urlPath === "/" ? "/index.html" : urlPath;
-  const resolved = path.resolve(PUBLIC_DIR, `.${decodeURIComponent(requested)}`);
-  return resolved.startsWith(PUBLIC_DIR) ? resolved : null;
+  // Only browser assets are public; settings, source, logs and .git are not.
+  return PUBLIC_FILES.has(requested) ? path.join(PUBLIC_DIR, requested) : null;
 }
 
 function yahooSymbol(symbol) {
@@ -149,6 +192,7 @@ async function fetchHistory(symbol, years) {
   url.searchParams.set("includeAdjustedClose", "true");
 
   const response = await fetch(url, {
+    signal: AbortSignal.timeout(15000),
     headers: {
       "User-Agent": "MarketLab/1.0 (+local research tool)",
       "Accept": "application/json",
@@ -237,6 +281,13 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+server.on("error", (error) => {
+  console.error(error.code === "EADDRINUSE"
+    ? `Port ${PORT} is already in use. Stop the other server or choose another port with --port.`
+    : `Unable to start MarketLab: ${error.message}`);
+  process.exitCode = 1;
+});
+
+server.listen(PORT, "localhost", () => {
   console.log(`MarketLab is running at http://localhost:${PORT}`);
 });

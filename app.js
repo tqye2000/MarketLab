@@ -58,6 +58,11 @@ const SAMPLE_CSV = `Date,Open,High,Low,Close,Volume
 
 const state = {
   watchlist: ["AAPL", "MSFT", "NVDA", "SPY"],
+  holdings: [],
+  editingHolding: null,
+  holdingQuotes: new Map(),
+  dataMetaCache: new Map(),
+  selectionLoading: false,
   activeSymbol: "AAPL",
   cache: new Map(),
   metaCache: new Map(),
@@ -72,11 +77,27 @@ const state = {
   savedSymbolParams: {},
   settingsLoaded: false,
   saveTimer: null,
+  selectionRequest: 0,
+  optimiserBusy: false,
   backtest: null,
   data: [],
 };
 
 const els = {
+  holdingForm: document.querySelector("#holdingForm"),
+  holdingSymbolInput: document.querySelector("#holdingSymbolInput"),
+  holdingQuantityInput: document.querySelector("#holdingQuantityInput"),
+  holdingAverageInput: document.querySelector("#holdingAverageInput"),
+  saveHoldingBtn: document.querySelector("#saveHoldingBtn"),
+  cancelHoldingBtn: document.querySelector("#cancelHoldingBtn"),
+  refreshHoldingsBtn: document.querySelector("#refreshHoldingsBtn"),
+  holdingsBody: document.querySelector("#holdingsBody"),
+  holdingsMessage: document.querySelector("#holdingsMessage"),
+  holdingAnalysisTitle: document.querySelector("#holdingAnalysisTitle"),
+  holdingDecision: document.querySelector("#holdingDecision"),
+  holdingReason: document.querySelector("#holdingReason"),
+  holdingExit: document.querySelector("#holdingExit"),
+  holdingAnalysisDetail: document.querySelector("#holdingAnalysisDetail"),
   watchlist: document.querySelector("#watchlist"),
   symbolForm: document.querySelector("#symbolForm"),
   symbolInput: document.querySelector("#symbolInput"),
@@ -185,7 +206,14 @@ function marketDisplayName(symbol) {
 
 async function fetchMarketData(symbol, years, force = false) {
   const key = `${symbol}-${years}`;
-  if (!force && state.cache.has(key)) return state.cache.get(key);
+  if (!force && state.cache.has(key)) {
+    const meta = state.dataMetaCache.get(key);
+    if (meta) {
+      state.metaCache.set(symbol, meta);
+      state.holdingQuotes.set(symbol, { bar: state.cache.get(key).at(-1), currency: meta.currency, demo: meta.demo });
+    }
+    return state.cache.get(key);
+  }
 
   const apiUrl = `${location.protocol.startsWith("http") ? "" : "http://localhost:4173"}/api/history?symbol=${encodeURIComponent(sourceSymbol(symbol))}&years=${encodeURIComponent(years)}`;
 
@@ -199,19 +227,28 @@ async function fetchMarketData(symbol, years, force = false) {
     if (rows.length < 12) throw new Error("Not enough rows returned");
     state.cache.set(key, rows);
     const currency = normalizeCurrency(meta.currency || inferCurrency(symbol));
-    state.metaCache.set(symbol, {
+    const marketMeta = {
       symbol,
       currency,
       sourceSymbol: meta.symbol || sourceSymbol(symbol),
       shortName: meta.shortName || "",
       longName: meta.longName || "",
       displayName: meta.displayName || "",
-    });
+      demo: false,
+    };
+    state.metaCache.set(symbol, marketMeta);
+    state.dataMetaCache.set(key, marketMeta);
+    state.holdingQuotes.set(symbol, { bar: rows.at(-1), currency, demo: false });
+    renderHoldings();
     setStatus(`Loaded ${rows.length} daily bars from Yahoo Finance${currency ? ` (${currency})` : ""}`);
     return rows;
   } catch (error) {
     const fallback = parseCsv(SAMPLE_CSV);
-    state.metaCache.set(symbol, { symbol, currency: "USD", sourceSymbol: "AAPL", shortName: "", longName: "", displayName: "" });
+    const marketMeta = { symbol, currency: "USD", sourceSymbol: "AAPL", shortName: "", longName: "", displayName: "", demo: true };
+    state.metaCache.set(symbol, marketMeta);
+    state.dataMetaCache.set(key, marketMeta);
+    state.holdingQuotes.set(symbol, { demo: true });
+    renderHoldings();
     setStatus(`Using demo data: ${error.message}`);
     state.cache.set(key, fallback);
     return fallback;
@@ -318,9 +355,8 @@ function rsi(values, period) {
     } else {
       avgGain = (avgGain * (period - 1) + gain) / period;
       avgLoss = (avgLoss * (period - 1) + loss) / period;
-      const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-      result[i] = 100 - 100 / (1 + rs);
     }
+    if (i >= period) result[i] = avgLoss === 0 ? (avgGain === 0 ? 50 : 100) : 100 - 100 / (1 + avgGain / avgLoss);
   }
   return result;
 }
@@ -606,6 +642,7 @@ function renderParamInputs() {
       getParams();
       saveSettings();
       renderStrategyIndicatorChart();
+      renderHoldingAnalysis();
     });
   });
 }
@@ -665,14 +702,245 @@ function renderWatchlist() {
     const row = document.createElement("div");
     row.className = `watch-row${symbol === state.activeSymbol ? " active" : ""}`;
     row.innerHTML = `
-      <button class="watch-symbol" type="button">${symbol}</button>
+      <button class="watch-symbol" type="button"></button>
       <span class="watch-price">${latest ? money(latest.close, currencyForSymbol(symbol)) : "--"}</span>
-      <button class="remove-button" type="button" title="Remove ${symbol}" aria-label="Remove ${symbol}">×</button>
+      <button class="remove-button" type="button">×</button>
     `;
+    row.querySelector(".watch-symbol").textContent = symbol;
+    row.querySelector(".remove-button").title = `Remove ${symbol}`;
+    row.querySelector(".remove-button").setAttribute("aria-label", `Remove ${symbol}`);
     row.querySelector(".watch-symbol").addEventListener("click", () => selectSymbol(symbol));
     row.querySelector(".remove-button").addEventListener("click", () => removeSymbol(symbol));
     els.watchlist.appendChild(row);
   });
+}
+
+function sanitizeHoldings(value) {
+  if (!Array.isArray(value)) return [];
+  const holdings = new Map();
+  for (const item of value) {
+    if (!item || typeof item !== "object" || typeof item.symbol !== "string") continue;
+    const symbol = item.symbol.trim().toUpperCase();
+    if (!/^[A-Z0-9.^=:_-]{1,40}$/.test(symbol)) continue;
+    if (!Number.isFinite(item.quantity) || item.quantity <= 0 ||
+        !Number.isFinite(item.averagePrice) || item.averagePrice <= 0 ||
+        !Number.isFinite(item.quantity * item.averagePrice)) continue;
+    holdings.set(symbol, { symbol, quantity: item.quantity, averagePrice: item.averagePrice });
+  }
+  return [...holdings.values()];
+}
+
+function resetHoldingForm() {
+  state.editingHolding = null;
+  els.holdingSymbolInput.value = "";
+  els.holdingQuantityInput.value = "";
+  els.holdingAverageInput.value = "";
+  els.saveHoldingBtn.textContent = "Add holding";
+  els.cancelHoldingBtn.hidden = true;
+}
+
+function saveHolding(symbol, quantity, averagePrice) {
+  const holding = sanitizeHoldings([{ symbol, quantity, averagePrice }])[0];
+  if (!holding) {
+    els.holdingsMessage.textContent = "Enter a valid symbol, positive share quantity and average price.";
+    return false;
+  }
+  if (state.holdings.some((item) => item.symbol === holding.symbol && item.symbol !== state.editingHolding)) {
+    els.holdingsMessage.textContent = `${holding.symbol} already exists. Use Edit to change the position.`;
+    return false;
+  }
+  const index = state.holdings.findIndex((item) => item.symbol === state.editingHolding);
+  if (index < 0) state.holdings.push(holding);
+  else state.holdings[index] = holding;
+  resetHoldingForm();
+  saveSettings();
+  renderHoldings();
+  renderHoldingAnalysis();
+  els.holdingsMessage.textContent = `Saved ${holding.symbol}.`;
+  return true;
+}
+
+function editHolding(symbol) {
+  const holding = state.holdings.find((item) => item.symbol === symbol);
+  if (!holding) return;
+  state.editingHolding = symbol;
+  els.holdingSymbolInput.value = symbol;
+  els.holdingQuantityInput.value = holding.quantity;
+  els.holdingAverageInput.value = holding.averagePrice;
+  els.saveHoldingBtn.textContent = "Save changes";
+  els.cancelHoldingBtn.hidden = false;
+  els.holdingsMessage.textContent = `Editing ${symbol}. Average price must use the same currency/units as its quote.`;
+  els.holdingQuantityInput.focus();
+}
+
+function removeHolding(symbol) {
+  state.holdings = state.holdings.filter((item) => item.symbol !== symbol);
+  if (state.editingHolding === symbol) resetHoldingForm();
+  saveSettings();
+  renderHoldings();
+  renderHoldingAnalysis();
+  els.holdingsMessage.textContent = `Removed ${symbol} from holdings. No trade was placed.`;
+}
+
+function holdingValuation(holding, quote) {
+  if (!quote || quote.demo || !Number.isFinite(quote.bar?.close) || quote.bar.close <= 0) return null;
+  const cost = holding.quantity * holding.averagePrice;
+  const value = holding.quantity * quote.bar.close;
+  if (!Number.isFinite(value)) return null;
+  return { cost, value, profit: value - cost, returnRate: value / cost - 1 };
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[character]);
+}
+
+function renderHoldings() {
+  if (!state.holdings.length) {
+    els.holdingsBody.innerHTML = '<tr><td colspan="7">No holdings yet. Add a stock, share quantity and average purchase price above.</td></tr>';
+    return;
+  }
+  els.holdingsBody.innerHTML = state.holdings.map((holding) => {
+    const { symbol, quantity, averagePrice } = holding;
+    const quote = state.holdingQuotes.get(symbol);
+    const valuation = holdingValuation(holding, quote);
+    const currency = quote && !quote.demo ? quote.currency : "";
+    const price = (value) => escapeHtml(currency ? `${money(value, currency)} (${currency})` : `${formatNumber(value)} quote units`);
+    const unavailable = quote?.demo ? "Unavailable (demo ignored)" : "Not loaded";
+    return `<tr class="${symbol === state.activeSymbol ? "active" : ""}">
+      <td><strong>${symbol}</strong></td>
+      <td>${new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 }).format(quantity)}</td>
+      <td>${price(averagePrice)}</td>
+      <td>${valuation ? `${price(quote.bar.close)}<span class="holding-date">As of ${escapeHtml(quote.bar.date)}</span>` : unavailable}</td>
+      <td>${valuation ? price(valuation.value) : "--"}</td>
+      <td class="${valuation?.profit > 0 ? "positive" : valuation?.profit < 0 ? "negative" : ""}">${valuation ? `${price(valuation.profit)} (${percent(valuation.returnRate)})` : "--"}</td>
+      <td><div class="holding-actions">
+        <button type="button" data-holding-action="analyse" data-symbol="${symbol}" aria-label="Analyse ${symbol}">Analyse</button>
+        <button type="button" class="secondary-button" data-holding-action="edit" data-symbol="${symbol}" aria-label="Edit ${symbol}">Edit</button>
+        <button type="button" class="secondary-button" data-holding-action="remove" data-symbol="${symbol}" aria-label="Remove holding ${symbol}">Remove</button>
+      </div></td>
+    </tr>`;
+  }).join("");
+}
+
+// Evaluate the exit rule for an already-owned long position, not a simulated entry.
+// Holdings always use full, latest history; chart zoom only affects the backtest.
+function buildHoldingAnalysis(rows, strategy, params) {
+  const unavailable = (reason) => ({ action: "UNAVAILABLE", reason, trigger: null });
+  const definitions = strategyParams[strategy];
+  if (!definitions || definitions.some((param) => !Number.isFinite(params[param.key]) ||
+      params[param.key] < param.min || params[param.key] > param.max ||
+      (param.key !== "deviation" && !Number.isInteger(params[param.key]))) ||
+      (["sma", "macd"].includes(strategy) && params.fast >= params.slow) ||
+      (strategy === "rsi" && params.buyBelow >= params.sellAbove)) {
+    return unavailable("Correct the selected strategy parameters before analysing this holding.");
+  }
+  if (!rows.length || !Number.isFinite(rows.at(-1).close) || rows.at(-1).close <= 0) {
+    return unavailable("No valid market history is available.");
+  }
+  if (strategy === "buyhold") {
+    return { action: "HOLD", reason: "Buy and hold keeps the position invested; it defines no sell rule or price target.", trigger: null };
+  }
+  const { indicators } = buildSignalSeries(rows, { strategy, params, longOnly: true });
+  const latest = rows.at(-1);
+  const last = (key) => indicators[key]?.at(-1);
+  let exit;
+  let reason;
+  let trigger;
+  if (strategy === "sma") {
+    if (!Number.isFinite(last("fast")) || !Number.isFinite(last("slow"))) return unavailable("Not enough history to calculate both moving averages. Increase the data range.");
+    exit = last("fast") <= last("slow");
+    reason = `Fast SMA ${formatNumber(last("fast"))} is ${exit ? "at or below" : "above"} slow SMA ${formatNumber(last("slow"))}.`;
+    trigger = nextSmaTrigger(rows, params, 1);
+  } else if (strategy === "rsi") {
+    if (!Number.isFinite(last("rsi"))) return unavailable("Not enough history to calculate RSI. Increase the data range.");
+    exit = last("rsi") > params.sellAbove;
+    reason = `RSI ${formatNumber(last("rsi"))} is ${exit ? "above" : "not above"} the sell threshold ${params.sellAbove}.`;
+    trigger = nextRsiTrigger(rows, params, 1);
+  } else if (strategy === "breakout") {
+    if (!Number.isFinite(last("lows"))) return unavailable("Not enough history to calculate the Donchian exit channel. Increase the data range.");
+    exit = latest.close < last("lows");
+    reason = `Latest close is ${exit ? "below" : "not below"} the prior ${params.exit}-bar low (${formatNumber(last("lows"))}).`;
+    trigger = nextBreakoutTrigger(rows, params, 1);
+  } else if (strategy === "macd") {
+    if (!Number.isFinite(last("macd")) || !Number.isFinite(last("signal"))) return unavailable("Not enough history to calculate MACD and its signal. Increase the data range.");
+    exit = last("macd") <= last("signal");
+    reason = `MACD ${formatNumber(last("macd"))} is ${exit ? "at or below" : "above"} its signal ${formatNumber(last("signal"))}.`;
+    trigger = nextMacdTrigger(rows, params, 1);
+  } else if (strategy === "bollinger") {
+    if (!Number.isFinite(last("bbMiddle"))) return unavailable("Not enough history to calculate the Bollinger middle band. Increase the data range.");
+    exit = latest.close > last("bbMiddle");
+    reason = `Latest close is ${exit ? "above" : "not above"} the middle band (${formatNumber(last("bbMiddle"))}).`;
+    trigger = nextBollingerTrigger(rows, params, 1);
+  }
+  return { action: exit ? "SELL" : "HOLD", reason, trigger };
+}
+
+function renderHoldingAnalysis() {
+  const holding = state.holdings.find((item) => item.symbol === state.activeSymbol);
+  const strategy = els.strategySelect.value;
+  const strategyLabel = els.strategySelect.selectedOptions?.[0]?.textContent || strategy.toUpperCase();
+  els.holdingAnalysisTitle.textContent = holding ? `${holding.symbol} · ${strategyLabel}` : "Holding analysis";
+  els.holdingExit.textContent = "";
+  els.holdingAnalysisDetail.textContent = "";
+  const showDecision = (action, reason) => {
+    els.holdingDecision.textContent = action;
+    els.holdingDecision.className = `signal-action ${action === "SELL" ? "sell" : "hold"}`;
+    els.holdingReason.textContent = reason;
+  };
+  if (!holding) {
+    showDecision("--", "Add or select a holding to analyse its exit rules using the strategy in Strategy Lab.");
+    return;
+  }
+  if (state.selectionLoading) {
+    showDecision("LOADING", "Loading this holding's market history…");
+    return;
+  }
+  const key = `${holding.symbol}-${els.rangeSelect.value}`;
+  const meta = state.dataMetaCache.get(key);
+  const rows = state.cache.get(key) || [];
+  if (!meta || meta.demo || !holdingValuation(holding, state.holdingQuotes.get(holding.symbol))) {
+    showDecision("UNAVAILABLE", "Verified market data is unavailable. Demo prices are never used to value holdings or generate sell/hold guidance. Refresh prices to retry.");
+    return;
+  }
+  const analysis = buildHoldingAnalysis(rows, strategy, getParams());
+  showDecision(analysis.action, analysis.reason);
+  const latest = rows.at(-1);
+  if (!latest) return;
+  const quoteMoney = (value) => `${money(value, meta.currency)} (${meta.currency})`;
+  if (analysis.action === "SELL") {
+    els.holdingExit.textContent = `Exit rule is met at the latest close of ${quoteMoney(latest.close)}. This is a reference price, not a guaranteed sale price.`;
+  } else if (analysis.action === "HOLD" && analysis.trigger) {
+    const { level, operator } = analysis.trigger;
+    els.holdingExit.textContent = Number.isFinite(level) && level > 0
+      ? `Next-close sell threshold: ${operator} ${quoteMoney(level)} (${percent(level / latest.close - 1)} from latest close).`
+      : "No positive next-close sell threshold is reachable with the current history. Recalculate after the next bar.";
+  } else if (strategy === "buyhold") {
+    els.holdingExit.textContent = "Sell price: not defined by this strategy.";
+  }
+  const stale = Date.now() - Date.parse(latest.date) > 7 * 86400000;
+  els.holdingAnalysisDetail.textContent = `As of ${latest.date} · ${quoteMoney(latest.close)}. ${stale ? "Warning: this quote is over 7 days old; refresh and verify before acting. " : ""}Uses all ${rows.length} loaded bars, independent of chart zoom. Assumes your shares are already held long, regardless of the backtest position or short-mode setting. Average cost affects P/L, not these technical exit rules. ${analysis.trigger?.detail || ""}`;
+}
+
+async function refreshHoldings(force = true) {
+  if (els.refreshHoldingsBtn.disabled) return;
+  els.refreshHoldingsBtn.disabled = true;
+  els.holdingsMessage.textContent = "Loading holding prices…";
+  try {
+    const years = els.rangeSelect.value;
+    for (const { symbol } of [...state.holdings]) {
+      await fetchMarketData(symbol, years, force);
+    }
+    renderHoldings();
+    renderHoldingAnalysis();
+    const unavailable = state.holdings.filter((holding) => !holdingValuation(holding, state.holdingQuotes.get(holding.symbol))).length;
+    els.holdingsMessage.textContent = unavailable
+      ? `${unavailable} holding(s) have unavailable prices. Demo data has been excluded.`
+      : "Holding prices updated. See each quote's as-of date; P/L excludes fees, dividends and taxes.";
+  } finally {
+    els.refreshHoldingsBtn.disabled = false;
+  }
 }
 
 function latestBarFor(symbol) {
@@ -870,17 +1138,15 @@ function nextRsiTrigger(rows, params, basePosition) {
   if (!averages) return null;
 
   const latestClose = closes.at(-1);
-  if (basePosition) {
-    const rs = params.sellAbove / (100 - params.sellAbove);
-    const level = latestClose + (period - 1) * (rs * averages.avgLoss - averages.avgGain);
-    if (!Number.isFinite(level)) return null;
-    return { level, operator: "above", detail: `RSI exit triggers when next RSI rises above ${params.sellAbove}.` };
-  }
-
-  const rs = params.buyBelow / (100 - params.buyBelow);
-  const level = latestClose + (period - 1) * (averages.avgLoss - averages.avgGain / rs);
+  const threshold = basePosition ? params.sellAbove : params.buyBelow;
+  const rs = threshold / (100 - threshold);
+  const difference = rs * averages.avgLoss - averages.avgGain;
+  // Solve Wilder's next update on either the rising- or falling-price branch.
+  const level = latestClose + (period - 1) * (difference >= 0 ? difference : difference / rs);
   if (!Number.isFinite(level)) return null;
-  return { level, operator: "below", detail: `RSI entry triggers when next RSI falls below ${params.buyBelow}.` };
+  return { level, operator: basePosition ? "above" : "below", detail: basePosition
+    ? `RSI exit triggers when next RSI rises above ${threshold}.`
+    : `RSI entry triggers when next RSI falls below ${threshold}.` };
 }
 
 function nextMacdTrigger(rows, params, basePosition) {
@@ -905,7 +1171,7 @@ function nextMacdTrigger(rows, params, basePosition) {
   const level = (signalLine - offset) / slope;
   if (!Number.isFinite(level)) return null;
 
-  const operator = basePosition ? (slope > 0 ? "below" : "above") : (slope > 0 ? "above" : "below");
+  const operator = basePosition ? (slope > 0 ? "at or below" : "at or above") : (slope > 0 ? "above" : "below");
   return {
     level,
     operator,
@@ -922,9 +1188,9 @@ function nextBollingerTrigger(rows, params, basePosition) {
   if (basePosition) {
     if (!Number.isFinite(middle)) return null;
     return {
-      level: middle,
+      level: sumLast(closes, params.period - 1) / (params.period - 1),
       operator: "above",
-      detail: `Bollinger exit uses the latest ${params.period}-bar middle band. The next bar's live band will move as price changes.`,
+      detail: `Bollinger exit solves for the next close above its updated ${params.period}-bar middle band. The threshold is recalculated after each new bar.`,
     };
   }
 
@@ -1023,6 +1289,7 @@ function getSelectedAnalysisRows(rows) {
 function setZoom(start, end) {
   const rows = state.data.length ? state.data : state.backtest?.rows || [];
   if (!rows.length) return;
+  hideOptimiserResults();
   const firstDate = rows[0].date;
   const lastDate = rows.at(-1).date;
   state.zoomStart = clampDate(start, firstDate, lastDate);
@@ -1619,7 +1886,7 @@ function inferCurrency(symbol) {
 
 function normalizeCurrency(currency) {
   if (!currency) return "";
-  if (currency.toUpperCase() === "GBP" || currency === "GBp") return "GBX";
+  if (currency === "GBp") return "GBX";
   return currency.toUpperCase();
 }
 
@@ -1666,15 +1933,15 @@ async function loadSettings() {
   }
 
   if (!settings) {
-    settings = {};
+    try {
+      settings = JSON.parse(localStorage.getItem("marketlabSettings") || "null") || {
+        watchlist: JSON.parse(localStorage.getItem("watchlist") || "null"),
+        activeSymbol: localStorage.getItem("activeSymbol"),
+      };
+    } catch {
+      settings = {};
+    }
   }
-
-  const browserWatchlist = JSON.parse(localStorage.getItem("watchlist") || "null");
-  const browserActiveSymbol = localStorage.getItem("activeSymbol");
-  if (Array.isArray(browserWatchlist) && browserWatchlist.length) {
-    settings.watchlist = [...new Set([...(settings.watchlist || []), ...browserWatchlist])];
-  }
-  if (!settings.activeSymbol && browserActiveSymbol) settings.activeSymbol = browserActiveSymbol;
 
   applySettings(settings);
   state.settingsLoaded = true;
@@ -1683,6 +1950,7 @@ async function loadSettings() {
 
 function applySettings(settings) {
   state.watchlist = Array.isArray(settings.watchlist) && settings.watchlist.length ? settings.watchlist : state.watchlist;
+  state.holdings = sanitizeHoldings(settings.holdings);
   state.activeSymbol = settings.activeSymbol || state.watchlist[0] || "AAPL";
   state.chartMode = settings.chartMode || state.chartMode;
   state.volumeInterval = Number(settings.volumeInterval) || state.volumeInterval;
@@ -1712,6 +1980,7 @@ function collectSettings() {
   getParams();
   return {
     watchlist: state.watchlist,
+    holdings: state.holdings,
     activeSymbol: state.activeSymbol,
     rangeYears: els.rangeSelect.value,
     startingCapital: Number(els.capitalInput.value) || 10000,
@@ -1729,35 +1998,68 @@ function collectSettings() {
   };
 }
 
+let settingsSaveQueue = Promise.resolve();
+
+function persistSettings(settings, keepalive = false) {
+  const body = JSON.stringify(settings);
+  settingsSaveQueue = settingsSaveQueue.then(async () => {
+    try {
+      const response = await fetch(settingsUrl(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        keepalive,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch {
+      setStatus("Server settings save failed; any browser backup remains available.");
+    }
+  });
+  return settingsSaveQueue;
+}
+
 function saveSettings() {
   if (!state.settingsLoaded) return;
   clearTimeout(state.saveTimer);
-  state.saveTimer = setTimeout(async () => {
-    const settings = collectSettings();
+  const settings = collectSettings();
+  try {
+    localStorage.setItem("marketlabSettings", JSON.stringify(settings));
     localStorage.setItem("watchlist", JSON.stringify(settings.watchlist));
     localStorage.setItem("activeSymbol", settings.activeSymbol);
-    try {
-      await fetch(settingsUrl(), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settings),
-      });
-    } catch {
-      setStatus("Settings saved in browser only; server settings file unavailable");
-    }
+  } catch {
+    setStatus("Browser settings backup unavailable; saving to the local server.");
+  }
+  state.saveTimer = setTimeout(() => {
+    state.saveTimer = null;
+    persistSettings(collectSettings());
   }, 250);
 }
 
+window.addEventListener("pagehide", () => {
+  if (state.saveTimer === null) return;
+  clearTimeout(state.saveTimer);
+  state.saveTimer = null;
+  persistSettings(collectSettings(), true);
+});
+
 async function selectSymbol(symbol, force = false, options = {}) {
+  const request = ++state.selectionRequest;
+  hideOptimiserResults();
   const dataKey = `${symbol}-${els.rangeSelect.value}`;
   const previousSymbol = state.activeSymbol;
   const shouldAutoLoadParams = options.autoLoadParams ?? symbol !== previousSymbol;
   state.activeSymbol = symbol;
+  state.selectionLoading = true;
   els.activeSymbol.textContent = marketDisplayName(symbol);
   renderWatchlist();
+  renderHoldings();
+  renderHoldingAnalysis();
   if (shouldAutoLoadParams) autoLoadSymbolParams();
   updateSavedParamsButtons();
-  state.data = await fetchMarketData(symbol, els.rangeSelect.value, force);
+  const data = await fetchMarketData(symbol, els.rangeSelect.value, force);
+  if (request !== state.selectionRequest) return;
+  state.selectionLoading = false;
+  state.data = data;
   els.activeSymbol.textContent = marketDisplayName(symbol);
   syncZoomBounds(state.data, dataKey);
   state.backtest = runBacktest(getSelectedAnalysisRows(state.data));
@@ -1766,6 +2068,8 @@ async function selectSymbol(symbol, force = false, options = {}) {
   renderSignals(state.backtest.trades);
   renderNextSignalTrigger();
   renderWatchlist();
+  renderHoldings();
+  renderHoldingAnalysis();
   renderChart();
   renderStrategyIndicatorChart();
   renderVolumeChart();
@@ -1774,7 +2078,7 @@ async function selectSymbol(symbol, force = false, options = {}) {
 
 async function refreshAllSymbols() {
   setStatus("Refreshing watchlist...");
-  for (const symbol of state.watchlist) {
+  for (const symbol of new Set([...state.watchlist, ...state.holdings.map((holding) => holding.symbol)])) {
     await fetchMarketData(symbol, els.rangeSelect.value, true);
   }
   await selectSymbol(state.activeSymbol);
@@ -1808,6 +2112,27 @@ function exportBacktest() {
   link.click();
   URL.revokeObjectURL(url);
 }
+
+els.holdingForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const symbol = els.holdingSymbolInput.value.trim().toUpperCase();
+  if (saveHolding(symbol, Number(els.holdingQuantityInput.value), Number(els.holdingAverageInput.value))) {
+    selectSymbol(symbol);
+  }
+});
+els.cancelHoldingBtn.addEventListener("click", () => {
+  resetHoldingForm();
+  els.holdingsMessage.textContent = "Edit cancelled.";
+});
+els.holdingsBody.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-holding-action]");
+  if (!button) return;
+  const { holdingAction, symbol } = button.dataset;
+  if (holdingAction === "analyse") selectSymbol(symbol);
+  if (holdingAction === "edit") editHolding(symbol);
+  if (holdingAction === "remove") removeHolding(symbol);
+});
+els.refreshHoldingsBtn.addEventListener("click", () => refreshHoldings());
 
 els.symbolForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1928,8 +2253,18 @@ function readOptimiserRanges() {
 }
 
 function hideOptimiserResults() {
+  optimiserCancelled.value = true;
+  state.lastOptimiserResult = null;
   els.optimiserResults.hidden = true;
   els.optimiserProgress.hidden = true;
+}
+
+function optimisationContext() {
+  return JSON.stringify([
+    state.activeSymbol, els.strategySelect.value, els.rangeSelect.value,
+    state.zoomStart, state.zoomEnd, els.capitalInput.value,
+    els.longOnlyInput.checked, els.feesInput.checked,
+  ]);
 }
 
 function renderOptimiserResults(result) {
@@ -1963,7 +2298,11 @@ function renderOptimiserResults(result) {
 }
 
 async function startOptimisation() {
+  if (state.optimiserBusy) return;
   const strategy = els.strategySelect.value;
+  const symbol = state.activeSymbol;
+  const rangeYears = els.rangeSelect.value;
+  const context = optimisationContext();
   if (strategy === "buyhold") { setStatus("Buy and hold has no tuneable parameters."); return; }
 
   const ranges = readOptimiserRanges();
@@ -1982,6 +2321,8 @@ async function startOptimisation() {
     longOnly: els.longOnlyInput.checked,
   };
 
+  state.optimiserBusy = true;
+  state.lastOptimiserResult = null;
   els.optimiseBtn.disabled = true;
   els.runBtn.disabled = true;
   els.optimiserResults.hidden = true;
@@ -1989,39 +2330,50 @@ async function startOptimisation() {
   els.optimiserProgressBar.style.width = "0%";
   els.optimiserProgressText.textContent = `0 / ${combos.toLocaleString()}`;
   optimiserCancelled = { value: false };
+  const cancelled = optimiserCancelled;
 
-  setStatus(`Optimising ${combos.toLocaleString()} combinations...`);
-  const data = await fetchMarketData(state.activeSymbol, els.rangeSelect.value);
-  const analysisRows = getSelectedAnalysisRows(data || []);
-  if (!analysisRows.length || analysisRows.length < 12) {
-    setStatus("Not enough data to optimise.");
-    els.optimiseBtn.disabled = false;
-    els.runBtn.disabled = false;
+  try {
+    setStatus(`Optimising ${combos.toLocaleString()} combinations...`);
+    const data = await fetchMarketData(symbol, rangeYears);
+    if (cancelled.value || context !== optimisationContext()) return;
+    const analysisRows = getSelectedAnalysisRows(data || []);
+    const analysisContext = optimisationContext();
+    if (analysisRows.length < 12) {
+      setStatus("Not enough data to optimise.");
+      return;
+    }
+
+    const result = await runOptimisation(analysisRows, strategy, ranges, baseOptions, (done, total) => {
+      const pct = Math.round((done / total) * 100);
+      els.optimiserProgressBar.style.width = `${pct}%`;
+      els.optimiserProgressText.textContent = `${done.toLocaleString()} / ${total.toLocaleString()}`;
+    }, cancelled);
+
+    if (cancelled.value || analysisContext !== optimisationContext()) return;
+    if (!result) { setStatus("Optimisation cancelled."); return; }
+    if (!result.results.length) { setStatus("No valid results found."); return; }
+
+    setStatus(`Optimisation complete — best CAGR: ${percent(result.results[0].metrics.cagr)}`);
+    state.lastOptimiserResult = { ...result, context: analysisContext };
+    renderOptimiserResults(result);
+  } catch (error) {
+    setStatus(`Optimisation failed: ${error.message}`);
+  } finally {
+    state.optimiserBusy = false;
     els.optimiserProgress.hidden = true;
-    return;
+    els.optimiseBtn.disabled = els.strategySelect.value === "buyhold";
+    els.runBtn.disabled = false;
   }
-
-  const result = await runOptimisation(analysisRows, strategy, ranges, baseOptions, (done, total) => {
-    const pct = Math.round((done / total) * 100);
-    els.optimiserProgressBar.style.width = `${pct}%`;
-    els.optimiserProgressText.textContent = `${done.toLocaleString()} / ${total.toLocaleString()}`;
-  }, optimiserCancelled);
-
-  els.optimiserProgress.hidden = true;
-  els.optimiseBtn.disabled = false;
-  els.runBtn.disabled = false;
-
-  if (!result) { setStatus("Optimisation cancelled."); return; }
-  if (!result.results.length) { setStatus("No valid results found."); return; }
-
-  setStatus(`Optimisation complete — best CAGR: ${percent(result.results[0].metrics.cagr)}`);
-  state.lastOptimiserResult = result;
-  renderOptimiserResults(result);
 }
 
 function applyBestParams() {
   const result = state.lastOptimiserResult;
   if (!result?.results.length) return;
+  if (result.context !== optimisationContext()) {
+    hideOptimiserResults();
+    setStatus("Settings changed. Optimise again before applying parameters.");
+    return;
+  }
   const best = result.results[0].params;
   const strategy = els.strategySelect.value;
   const symbol = state.activeSymbol;
@@ -2041,6 +2393,7 @@ els.applyBestBtn.addEventListener("click", applyBestParams);
 loadSettings().then(() => {
   renderParamInputs();
   renderOptimiserRanges();
+  renderHoldings();
   els.optimiseBtn.disabled = els.strategySelect.value === "buyhold";
-  selectSymbol(state.activeSymbol);
+  selectSymbol(state.activeSymbol, false, { autoLoadParams: true }).then(() => refreshHoldings(false));
 });

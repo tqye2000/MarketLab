@@ -241,6 +241,7 @@ button,
   min-width: 0;
   padding: 24px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   align-content: start;
 }
@@ -258,6 +259,102 @@ button,
   align-items: center;
   gap: 12px;
   color: var(--muted);
+}
+
+.holding-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(100px, 1fr)) auto;
+  align-items: end;
+  gap: 12px;
+}
+
+.holding-form-actions,
+.holding-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.holdings-table-wrap {
+  overflow-x: auto;
+}
+
+.holdings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.holdings-table caption {
+  text-align: left;
+  padding-bottom: 10px;
+}
+
+.holdings-table th,
+.holdings-table td {
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.holdings-table th:first-child,
+.holdings-table td:first-child,
+.holdings-table th:last-child,
+.holdings-table td:last-child {
+  text-align: left;
+}
+
+.holdings-table th {
+  color: var(--muted);
+}
+
+.holdings-table tr.active {
+  background: var(--soft-green);
+}
+
+.holding-date {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.holding-actions button {
+  min-height: 30px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.holding-analysis {
+  background: #f4f8f6;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--green);
+  border-radius: 8px;
+  margin-top: 16px;
+  padding: 16px;
+}
+
+.holding-analysis h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.holding-analysis p {
+  margin: 8px 0 0;
+}
+
+.holding-exit {
+  font-weight: 700;
+}
+
+@media (max-width: 1280px) {
+  .holding-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 680px) {
+  .holding-form { grid-template-columns: 1fr; }
 }
 
 .metrics-grid {
