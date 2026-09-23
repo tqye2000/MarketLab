@@ -22,6 +22,8 @@ node server.js --port 4174
 
 The app saves your watchlist and UI parameters to `data/settings.json` through the local server. This file is ignored by Git so your personal symbols, strategy settings, zoom window, capital amount, fee toggle, buy-and-hold comparison preference, and volume display preferences stay local to your machine.
 
+On Vercel, settings and holdings are saved in each visitor's browser storage. They do not sync between devices and can be lost when browser data is cleared. Market history is fetched through `/api/history` on a Vercel Function.
+
 Strategy parameters can also be saved per stock. Click **Save params** in the Strategy Lab to store the current parameters for the active symbol and strategy. When you switch back to that stock, the saved parameters are restored automatically. The optimiser's **Apply best parameters** button also saves the result per stock.
 
 ## Holdings

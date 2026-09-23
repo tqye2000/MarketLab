@@ -1923,11 +1923,17 @@ function settingsUrl() {
   return `${location.protocol.startsWith("http") ? "" : "http://localhost:4173"}/api/settings`;
 }
 
+function usesLocalSettingsServer() {
+  return location.protocol === "file:" || ["localhost", "127.0.0.1"].includes(location.hostname);
+}
+
 async function loadSettings() {
   let settings = null;
   try {
-    const response = await fetch(settingsUrl(), { cache: "no-store" });
-    if (response.ok) settings = await response.json();
+    if (usesLocalSettingsServer()) {
+      const response = await fetch(settingsUrl(), { cache: "no-store" });
+      if (response.ok) settings = await response.json();
+    }
   } catch {
     settings = null;
   }
@@ -2001,6 +2007,7 @@ function collectSettings() {
 let settingsSaveQueue = Promise.resolve();
 
 function persistSettings(settings, keepalive = false) {
+  if (!usesLocalSettingsServer()) return Promise.resolve();
   const body = JSON.stringify(settings);
   settingsSaveQueue = settingsSaveQueue.then(async () => {
     try {
