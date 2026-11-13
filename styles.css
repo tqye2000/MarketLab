@@ -199,7 +199,7 @@ button,
 
 .watch-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto auto auto;
   gap: 8px;
   align-items: center;
   border: 1px solid var(--line);
@@ -226,6 +226,13 @@ button,
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   font-size: 13px;
+}
+
+.watch-signal {
+  min-width: 44px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .remove-button {

@@ -643,6 +643,7 @@ function renderParamInputs() {
       saveSettings();
       renderStrategyIndicatorChart();
       renderHoldingAnalysis();
+      renderWatchlist();
     });
   });
 }
@@ -695,15 +696,36 @@ function autoLoadSymbolParams() {
   return true;
 }
 
+function watchlistSignalFor(symbol) {
+  const key = `${symbol}-${els.rangeSelect.value}`;
+  const rows = state.cache.get(key);
+  if (!rows?.length || rows.length < 2 || state.dataMetaCache.get(key)?.demo) {
+    return { action: "--", title: "No live data loaded for this symbol." };
+  }
+  const strategy = els.strategySelect.value;
+  const params = symbol === state.activeSymbol
+    ? getParams()
+    : state.savedSymbolParams[symbol]?.[strategy] || getParams();
+  const { target } = buildSignalSeries(rows, { strategy, params, longOnly: true });
+  const current = target.at(-1);
+  const previous = target.at(-2);
+  const asOf = rows.at(-1).date;
+  if (current > previous) return { action: "BUY", title: `Entry signal on ${asOf}.` };
+  if (current < previous) return { action: "SELL", title: `Exit signal on ${asOf}.` };
+  return { action: "HOLD", title: `No new signal on ${asOf}; strategy is ${current ? "long" : "flat"}.` };
+}
+
 function renderWatchlist() {
   els.watchlist.innerHTML = "";
   state.watchlist.forEach((symbol) => {
     const latest = latestBarFor(symbol);
+    const signal = watchlistSignalFor(symbol);
     const row = document.createElement("div");
     row.className = `watch-row${symbol === state.activeSymbol ? " active" : ""}`;
     row.innerHTML = `
       <button class="watch-symbol" type="button"></button>
       <span class="watch-price">${latest ? money(latest.close, currencyForSymbol(symbol)) : "--"}</span>
+      <span class="watch-signal${signal.action === "--" ? "" : ` signal-action ${signal.action.toLowerCase()}`}" title="${signal.title}">${signal.action}</span>
       <button class="remove-button" type="button">×</button>
     `;
     row.querySelector(".watch-symbol").textContent = symbol;
@@ -2105,6 +2127,25 @@ async function selectSymbol(symbol, force = false, options = {}) {
   renderStrategyIndicatorChart();
   renderVolumeChart();
   saveSettings();
+  loadWatchlistSignals();
+}
+
+async function loadWatchlistSignals() {
+  if (state.watchlistLoading) return;
+  state.watchlistLoading = true;
+  try {
+    const years = els.rangeSelect.value;
+    const missing = state.watchlist.filter((symbol) => !state.cache.has(`${symbol}-${years}`));
+    if (!missing.length) return;
+    const status = els.dataStatus.textContent;
+    for (const symbol of missing) {
+      await fetchMarketData(symbol, years);
+    }
+    setStatus(status);
+    renderWatchlist();
+  } finally {
+    state.watchlistLoading = false;
+  }
 }
 
 async function refreshAllSymbols() {
