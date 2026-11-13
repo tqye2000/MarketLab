@@ -756,6 +756,7 @@ function saveHolding(symbol, quantity, averagePrice) {
   saveSettings();
   renderHoldings();
   renderHoldingAnalysis();
+  renderChart();
   els.holdingsMessage.textContent = `Saved ${holding.symbol}.`;
   return true;
 }
@@ -779,6 +780,7 @@ function removeHolding(symbol) {
   saveSettings();
   renderHoldings();
   renderHoldingAnalysis();
+  renderChart();
   els.holdingsMessage.textContent = `Removed ${symbol} from holdings. No trade was placed.`;
 }
 
@@ -1361,12 +1363,15 @@ function renderChart() {
         : state.backtest.rows.map((row) => row.close);
   const series =
     visible.indexes.map((index) => fullSeries[index]);
+  const averagePrice =
+    mode === "price" ? state.holdings.find((item) => item.symbol === state.activeSymbol)?.averagePrice : null;
 
   const pad = { top: 18, right: 56, bottom: 34, left: 52 };
   const width = rect.width - pad.left - pad.right;
   const height = 330 - pad.top - pad.bottom;
-  const min = Math.min(...series);
-  const max = Math.max(...series);
+  const rangeValues = Number.isFinite(averagePrice) ? [...series, averagePrice] : series;
+  const min = Math.min(...rangeValues);
+  const max = Math.max(...rangeValues);
   const span = max - min || 1;
   const x = (index) => pad.left + (index / Math.max(series.length - 1, 1)) * width;
   const y = (value) => pad.top + (1 - (value - min) / span) * height;
@@ -1377,6 +1382,25 @@ function renderChart() {
   if (mode === "price" && state.backtest.indicators.fast) {
     drawLine(ctx, visible.indexes.map((index) => state.backtest.indicators.fast[index]), x, y, "#0f7a5a", 1.5);
     drawLine(ctx, visible.indexes.map((index) => state.backtest.indicators.slow[index]), x, y, "#b7791f", 1.5);
+  }
+
+  if (Number.isFinite(averagePrice)) {
+    const avgY = y(averagePrice);
+    ctx.save();
+    ctx.strokeStyle = "#7b3fa0";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, avgY);
+    ctx.lineTo(rect.width - pad.right, avgY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#7b3fa0";
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(`Avg ${averagePrice.toFixed(2)}`, rect.width - pad.right, avgY - 2);
+    ctx.restore();
   }
 
   state.backtest.trades.forEach((trade) => {
